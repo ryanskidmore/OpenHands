@@ -100,6 +100,27 @@ list / effort); revisit the `acp<0.11` pin if config options need a newer lib.
 Keep Canvas degrading gracefully against stock servers. Log upstream-worthy
 items in `UPSTREAM_NOTES.md` (both repos).
 
+## CORRECTIONS from M0 spikes (2026-08-05) — trust these over earlier sections
+
+- The stock agent-server ALREADY forwards `available_models` (+
+  `current_model_id`, `supports_runtime_model_switch`) on ConversationInfo;
+  Canvas just never reads `available_models`. Live model lists = Phase A.
+- `switch_acp_model` already uses ACP `set_config_option` when the agent
+  advertises the `model` config option (claude adapter 0.64.2 has NO
+  `set_session_model` at all). The pinned acp 0.10.1 still has the legacy
+  fallback; acp 0.12 removed it — don't bump without reworking acp_agent.py:464.
+- `extra="forbid"` applies to the AgentProfile union only; `ACPAgentSettings`
+  is effectively `extra="ignore"`. Additive ConversationInfo fields and new
+  REST routes are non-breaking per the repo's own REST policy (oasdiff CI).
+- Claude adapter advertises configOptions in session/new: `model` (select,
+  values like default/opus[1m]/sonnet/haiku from the Claude Agent SDK's
+  initializationResult), `effort` (category thought_level,
+  default/low/medium/high/xhigh/max), `mode`, `fast`, `agent`.
+- Effort seam server-side: `_codex_model_config_options` (acp_agent.py:395)
+  already splits `model/effort` composites for codex; Phase B = extend to
+  claude-code with configId `effort` + `max` level.
+- Full spike details + Phase B scope: PROGRESS.md "M0 findings".
+
 ## Gotchas
 
 - Gemini defaults must stay vertex-safe (`gemini-2.5-pro`); gemini-cli ≥0.43
