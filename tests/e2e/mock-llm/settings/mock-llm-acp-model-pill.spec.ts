@@ -67,7 +67,9 @@ const MOCK_MODELS = [
 ] as const;
 const DEFAULT_MODEL_ID = "mock-smart";
 const SWITCH_TARGET_MODEL_ID = "mock-deep";
-const DEFAULT_EFFORT = "high";
+// The mock server advertises currentValue "high" for its effort select;
+// whether the UI sees it depends on the agent-server (see the liveEffort
+// probe in step 3), so assertions derive from the probe, not this value.
 const EFFORT_LEVELS = [
   "default",
   "low",
@@ -203,6 +205,24 @@ test.describe("mock-LLM ACP model pill (dynamic model + effort switching)", () =
     const popover = page.getByTestId("chat-input-llm-model-popover");
     await expect(pill).toBeVisible({ timeout: 15_000 });
 
+    // Adaptive to the agent-server in use: servers with the effort-surfacing
+    // changes report the session's live effort ("high", the mock's advertised
+    // currentValue) on ConversationInfo; stock servers omit the field and the
+    // pill falls back to "default" until an effort is explicitly chosen
+    // (use-chat-input-model-state's parse-fallback). Probe once and assert
+    // the matching behavior so this spec passes against both.
+    const infoResp = await page.request.get(
+      `${BACKEND_URL}/api/conversations/${conversationId}`,
+      { headers: { "X-Session-API-Key": SESSION_API_KEY } },
+    );
+    expect(infoResp.ok()).toBe(true);
+    const info = (await infoResp.json()) as { current_effort?: string | null };
+    const liveEffort =
+      typeof info.current_effort === "string" && info.current_effort !== ""
+        ? info.current_effort
+        : null;
+    const initialEffort = liveEffort ?? "default";
+
     await test.step("pill starts on the mock server's default model", async () => {
       // A bare model id (no live effort embedded — labelForAcpModel only
       // suffixes an effort parsed out of the id itself, and the session's
@@ -237,10 +257,11 @@ test.describe("mock-LLM ACP model pill (dynamic model + effort switching)", () =
         ).toBeVisible({ timeout: 5_000 });
       }
 
-      // The mock server's default effort ("high") is highlighted as current.
+      // Live-effort servers highlight the mock's advertised default
+      // ("high"); stock servers highlight the "default" fallback row.
       await expect(
         page
-          .getByTestId(`chat-input-acp-effort-option-${DEFAULT_EFFORT}`)
+          .getByTestId(`chat-input-acp-effort-option-${initialEffort}`)
           .locator("svg"),
       ).toBeVisible();
     });
@@ -252,17 +273,21 @@ test.describe("mock-LLM ACP model pill (dynamic model + effort switching)", () =
       await expect(popover).not.toBeVisible({ timeout: 5_000 });
 
       // The switch composes the base model with the session's current
-      // effort ("high", the mock's default) — composeAcpModelId/M5. The
-      // pill's title becomes the composite "<label> · <effort>" label —
-      // labelForAcpModel resolves <label> against claude-code's *static*
-      // curated registry (real Claude model ids), which our mock ids
-      // aren't in, so it falls back to the raw id ("mock-deep") rather
-      // than the live-advertised display name ("Mock Deep").
-      await expect(pill).toHaveAttribute(
-        "title",
-        `${SWITCH_TARGET_MODEL_ID} ${DOT} ${DEFAULT_EFFORT}`,
-        { timeout: 15_000 },
-      );
+      // effort — composeAcpModelId/M5. With a live-effort server that is
+      // the mock's "high" and the pill's title becomes the composite
+      // "<label> · <effort>"; on stock servers the current effort is the
+      // "default" fallback, which composes to the bare id. labelForAcpModel
+      // resolves <label> against claude-code's *static* curated registry
+      // (real Claude model ids), which our mock ids aren't in, so it falls
+      // back to the raw id ("mock-deep") rather than the live-advertised
+      // display name ("Mock Deep").
+      const expectedTitle =
+        liveEffort && liveEffort !== "default"
+          ? `${SWITCH_TARGET_MODEL_ID} ${DOT} ${liveEffort}`
+          : SWITCH_TARGET_MODEL_ID;
+      await expect(pill).toHaveAttribute("title", expectedTitle, {
+        timeout: 15_000,
+      });
     });
 
     await test.step("reopening the pill shows the switched model as current", async () => {
@@ -276,34 +301,49 @@ test.describe("mock-LLM ACP model pill (dynamic model + effort switching)", () =
       // The effort highlight is unaffected by a model-only switch.
       await expect(
         page
-          .getByTestId(`chat-input-acp-effort-option-${DEFAULT_EFFORT}`)
+          .getByTestId(`chat-input-acp-effort-option-${initialEffort}`)
           .locator("svg"),
       ).toBeVisible();
     });
 
-    await test.step("switching effort to max updates the pill", async () => {
-      await page.getByTestId("chat-input-acp-effort-option-max").click();
-      await expect(popover).not.toBeVisible({ timeout: 5_000 });
+    if (liveEffort) {
+      // Applying an effort requires the server-side composite splitter,
+      // which ships with the same server changes that surface live effort —
+      // gate on the probe. A stock server would (correctly) reject the
+      // composite id: the mock validates model values like claude-agent-acp
+      // does, so the switch 400s and the pill stays on the bare id.
+      await test.step("switching effort to max updates the pill", async () => {
+        await page.getByTestId("chat-input-acp-effort-option-max").click();
+        await expect(popover).not.toBeVisible({ timeout: 5_000 });
 
-      await expect(pill).toHaveAttribute(
-        "title",
-        `${SWITCH_TARGET_MODEL_ID} ${DOT} max`,
-        { timeout: 15_000 },
-      );
-    });
+        await expect(pill).toHaveAttribute(
+          "title",
+          `${SWITCH_TARGET_MODEL_ID} ${DOT} max`,
+          { timeout: 15_000 },
+        );
+      });
 
-    await test.step("reopening the pill shows max as current with the model unchanged", async () => {
-      await pill.click();
-      await expect(popover).toBeVisible({ timeout: 5_000 });
-      await expect(
-        page.getByTestId("chat-input-acp-effort-option-max").locator("svg"),
-      ).toBeVisible();
-      await expect(
-        page
-          .getByTestId(`chat-input-acp-model-option-${SWITCH_TARGET_MODEL_ID}`)
-          .locator("svg"),
-      ).toBeVisible();
-    });
+      await test.step("reopening the pill shows max as current with the model unchanged", async () => {
+        await pill.click();
+        await expect(popover).toBeVisible({ timeout: 5_000 });
+        await expect(
+          page.getByTestId("chat-input-acp-effort-option-max").locator("svg"),
+        ).toBeVisible();
+        await expect(
+          page
+            .getByTestId(
+              `chat-input-acp-model-option-${SWITCH_TARGET_MODEL_ID}`,
+            )
+            .locator("svg"),
+        ).toBeVisible();
+      });
+    } else {
+      await test.step("effort switching skipped (server reports no live effort) — close the pill", async () => {
+        // The popover closes on toggle/click-outside, not Escape.
+        await pill.click();
+        await expect(popover).not.toBeVisible({ timeout: 5_000 });
+      });
+    }
 
     await test.step("no error banner after switching model and effort", async () => {
       const errorBanner = page.getByTestId("error-message-banner");
