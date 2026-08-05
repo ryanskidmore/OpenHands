@@ -54,7 +54,19 @@ export function ChatInputModelMenuContent({
   const hasModelRows = model.showAcpPicker || Boolean(model.displayModel);
 
   const handleSelectAcpModel = (modelId: string) => {
-    if (modelId !== model.currentModelId) {
+    // Every picker row is a bare base model id (see `parseAcpModelId` —
+    // composite "<base>/<effort>" ids only ever appear as a *session's*
+    // `currentModelId`, never as an offered choice), so switching to a
+    // different base always sends that bare id, silently dropping any
+    // effort suffix the current session id carried. Effort *preservation*
+    // across a base switch is M5's job; this is the one place that "drop
+    // it for now" rule is encoded. Guarding on `currentModelBaseId` (not
+    // just `currentModelId`) also makes re-selecting the already-current
+    // row (highlighted via the same base fallback) a no-op.
+    if (
+      modelId !== model.currentModelId &&
+      modelId !== model.currentModelBaseId
+    ) {
       switchAcpModel.mutate({
         conversationId: model.switchConversationId,
         model: modelId,
@@ -76,7 +88,12 @@ export function ChatInputModelMenuContent({
             </Typography.Text>
           </li>
           {model.availableAcpModels.map((option) => {
-            const isSelected = option.id === model.currentModelId;
+            // Exact match first; composite session ids (e.g. "sonnet/high")
+            // fall back to matching their parsed base so the bare "sonnet"
+            // row still shows as current (see currentModelBaseId).
+            const isSelected =
+              option.id === model.currentModelId ||
+              option.id === model.currentModelBaseId;
             return (
               <ContextMenuListItem
                 key={option.id}
@@ -93,7 +110,11 @@ export function ChatInputModelMenuContent({
               >
                 <span
                   className="flex-1 truncate text-sm leading-5"
-                  title={option.label}
+                  title={
+                    option.description
+                      ? `${option.label} — ${option.description}`
+                      : option.label
+                  }
                 >
                   {option.label}
                 </span>

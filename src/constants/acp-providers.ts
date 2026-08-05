@@ -118,6 +118,12 @@ export interface ACPModelOption {
   id: string;
   /** Human-readable label shown in Settings -> Agent. */
   label: string;
+  /**
+   * Optional longer description. Populated for live-session models (see
+   * ``AppConversation.acp_live_models``) and models.dev catalog extras;
+   * absent for the hand-curated registry entries above.
+   */
+  description?: string;
 }
 
 // Canvas-only UI metadata per built-in provider, keyed by the ACP registry
