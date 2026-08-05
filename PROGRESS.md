@@ -36,9 +36,26 @@ fork. Never touch `main`; never self-merge PRs — Ryan reviews/merges.
       (`src/utils/acp-model-id.ts` parse utility); catalog fetch gated to
       ACP contexts; acp_current_effort/available_efforts threaded (no UI
       yet — M5 consumes). Profile id from launched_agent_profile.
-- [ ] **M4** effort foundation: encode/parse utility + capability flags + settings UI
-- [ ] **M5** mid-session model+effort switcher
-- [ ] **M6** hardening: mock ACP server extensions, docs, full suites green
+- [x] **M4** effort foundation — composeAcpModelId/getAcpEffortLevels,
+      Effort dropdown in profile editor (parse-first fixes composite→custom
+      free-text bug), chips render "label · effort", 8 i18n keys ×15 langs.
+      PR #5.
+- [x] **M5** mid-session effort switcher — pill effort section (live
+      acp_available_efforts > static levels), switches via composite id
+      through existing mutation; model picks preserve effort. PR #6.
+- [x] **M6** hardening — mock ACP server advertises model+effort
+      configOptions, handles set_config_option (full-state responses) and
+      emits config_option_update; new spec tests/e2e/mock-llm/settings/
+      mock-llm-acp-model-pill.spec.ts (live models in pill, model switch,
+      effort switch); docs/ACP_AGENTS.md updated; UPSTREAM_NOTES.md in both
+      repos. Local-fork dev wiring ALREADY EXISTS upstream:
+      `OH_AGENT_SERVER_LOCAL_PATH=<sdk-path> npm run dev`.
+      CAVEAT: browser e2e cannot run in this sandbox (chromium missing
+      system libs; `sudo npx playwright install-deps chromium` to fix —
+      applies to ALL mock-llm specs incl. pre-existing). Mock server
+      verified instead by a direct JSON-RPC stdio probe (PASSED:
+      initialize/new_session shapes, both set_config_option round-trips,
+      2 config_option_update notifications). CI runs the browser layer.
 - [ ] **Phase B (SDK fork)** — revised scope in "Phase B scope" below
   - [x] B1 claude effort splitter — ryanskidmore/software-agent-sdk#1
         (446 SDK ACP tests pass; current_model_id keeps composite)
