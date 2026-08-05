@@ -4,8 +4,10 @@
  * running* model (e.g. a claude-code session running "high" reasoning
  * effort on Sonnet reports `current_model_id: "sonnet/high"`). Rendering
  * that composite id as a picker selection requires knowing which part is
- * the selectable base model — this module does only that split, not
- * anything about reasoning-effort UI, which is M4/M5's job.
+ * the selectable base model — {@link parseAcpModelId} does that split;
+ * {@link composeAcpModelId} builds the composite back up for Save, and
+ * {@link getAcpEffortLevels} lists the levels the effort UI should offer.
+ * M5 (live in-session effort switching) is still separate.
  *
  * Only claude-code and codex compose ids this way, and only with a suffix
  * that's actually one of *that server's* known effort levels — gemini-cli,
@@ -68,4 +70,49 @@ export function parseAcpModelId(
   }
 
   return { base, effort: suffix };
+}
+
+/**
+ * Compose a base model id and an optional effort level back into the raw
+ * ACP `model_id` {@link parseAcpModelId} would split apart — the inverse
+ * operation, used by Settings → Agent's Save path.
+ *
+ * Returns `base` unchanged (no "/<effort>" suffix) when `effort` is
+ * `null`/`undefined`/empty/`"default"`, or when `acpServer` doesn't
+ * recognize `effort` as one of its own levels (mirrors
+ * {@link parseAcpModelId}'s per-server gating exactly, so a level picked
+ * while e.g. claude-code was selected can never leak onto a server that
+ * doesn't support it). Otherwise returns `` `${base}/${effort}` ``, which
+ * `parseAcpModelId(..., acpServer)` round-trips back to `{ base, effort }`.
+ */
+export function composeAcpModelId(
+  base: string,
+  effort: string | null | undefined,
+  acpServer: string | null | undefined,
+): string {
+  const levels = acpServer ? ACP_MODEL_EFFORT_LEVELS[acpServer] : undefined;
+  if (!effort || effort === "default" || !levels?.includes(effort)) {
+    return base;
+  }
+  return `${base}/${effort}`;
+}
+
+/**
+ * The effort levels Settings → Agent's effort dropdown should offer for
+ * `acpServer`, with the UI-only `"default"` sentinel (no suffix — see
+ * {@link composeAcpModelId}) prepended. Returns `null` for a server with no
+ * recognized effort levels (gemini-cli, the "custom" preset, an unknown/no
+ * server) so callers know to hide the effort UI entirely rather than render
+ * a dropdown with nothing but "default".
+ *
+ * Reuses {@link ACP_MODEL_EFFORT_LEVELS} — the same per-server sets
+ * {@link parseAcpModelId} and {@link composeAcpModelId} already gate
+ * on — rather than keeping a second copy that could drift.
+ */
+export function getAcpEffortLevels(
+  acpServer: string | null | undefined,
+): string[] | null {
+  const levels = acpServer ? ACP_MODEL_EFFORT_LEVELS[acpServer] : undefined;
+  if (!levels) return null;
+  return ["default", ...levels];
 }
