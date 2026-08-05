@@ -19,17 +19,21 @@ fork. Never touch `main`; never self-merge PRs — Ryan reviews/merges.
   - [x] Spike: what the stock agent-server consumes/forwards (SDK repo map)
   - [x] Spike: Canvas-side persistence options + verified dev commands
   - [x] Findings recorded below; Phase B scope decided
-  - [ ] PR opened
-- [ ] **M1** models.dev catalog service (fetch/cache/provider-map/merge + tests)
+  - [x] PR opened — ryanskidmore/OpenHands#1
+- [x] **M1** models.dev catalog service (fetch/cache/provider-map/merge + tests)
+      — `src/api/models-dev-catalog.ts`, `src/hooks/query/use-models-dev-
+      catalog.ts` (+ 33 tests). PR: stacked on M0.
 - [ ] **M2** multi-model profile editing in settings
 - [ ] **M3** dynamic chat pill incl. custom-server picker
 - [ ] **M4** effort foundation: encode/parse utility + capability flags + settings UI
 - [ ] **M5** mid-session model+effort switcher
 - [ ] **M6** hardening: mock ACP server extensions, docs, full suites green
-- [ ] **Phase B (SDK fork)** scope from M0: forward configOptions →
-      ConversationInfo; set_config_option (thought_level) endpoint; profile
-      schema (models list/effort); dev-safe.mjs/uvx pointed at local fork;
-      acp<0.11 pin revisited
+- [ ] **Phase B (SDK fork)** — revised scope in "Phase B scope" below
+  - [x] B1 claude effort splitter — ryanskidmore/software-agent-sdk#1
+        (446 SDK ACP tests pass; current_model_id keeps composite)
+  - [ ] B2 effort in ConversationInfo (in progress, stacked on B1)
+  - [ ] B3 grouped selects + config_option_update refresh (nice-to-have)
+  - [ ] dev-safe.mjs/uvx pointed at local fork (needed before live testing)
 
 ## Verified dev commands
 
