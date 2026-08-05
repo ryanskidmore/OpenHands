@@ -989,4 +989,257 @@ describe("AgentSettingsScreen", () => {
       ).toEqual(["brand-new-model"]);
     });
   });
+
+  describe("effort settings (M4)", () => {
+    it("shows the effort dropdown for claude-code and codex, hidden for gemini-cli and custom", async () => {
+      const user = userEvent.setup();
+      vi.spyOn(SettingsService, "getSettings").mockResolvedValue(
+        buildSettings({
+          agent_settings: {
+            schema_version: 1,
+            agent_kind: "acp",
+            acp_server: "claude-code",
+            acp_command: [],
+            acp_model: null,
+          },
+        }),
+      );
+
+      renderAgentSettingsScreen();
+      await screen.findByTestId("agent-command-input");
+      expect(screen.getByTestId("agent-effort-selector")).toBeInTheDocument();
+
+      // Codex also composes effort suffixes — still shown.
+      await user.click(screen.getByTestId("agent-preset-selector"));
+      await user.click(await screen.findByRole("option", { name: "Codex" }));
+      expect(screen.getByTestId("agent-effort-selector")).toBeInTheDocument();
+
+      // Gemini CLI never composes an effort suffix — hidden.
+      await user.click(screen.getByTestId("agent-preset-selector"));
+      await user.click(
+        await screen.findByRole("option", { name: "Gemini CLI" }),
+      );
+      expect(
+        screen.queryByTestId("agent-effort-selector"),
+      ).not.toBeInTheDocument();
+
+      // Custom preset never composes an effort suffix either — hidden.
+      await user.click(screen.getByTestId("agent-preset-selector"));
+      await user.click(
+        await screen.findByRole("option", {
+          name: "SETTINGS$AGENT_PRESET_CUSTOM",
+        }),
+      );
+      expect(
+        screen.queryByTestId("agent-effort-selector"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("prefills the model dropdown with the base as a SELECTED entry (not custom text) and the effort dropdown with the suffix, for a composite acp_model", async () => {
+      // Regression guard for the parse-first rule: isKnownModelId must see
+      // the bare base ("sonnet"), not the raw composite ("sonnet/high") —
+      // otherwise it'd never match the curated list and the UI would
+      // incorrectly fall back to the free-text custom-model input.
+      vi.spyOn(SettingsService, "getSettings").mockResolvedValue(
+        buildSettings({
+          agent_settings: {
+            schema_version: 1,
+            agent_kind: "acp",
+            acp_server: "claude-code",
+            acp_command: [],
+            acp_model: "sonnet/high",
+          },
+        }),
+      );
+
+      renderAgentSettingsScreen();
+      await screen.findByTestId("agent-command-input");
+
+      expect(screen.getByLabelText("SETTINGS$AGENT_MODEL")).toHaveValue(
+        "Claude Sonnet 4.6",
+      );
+      // The dropdown resolved it as a known selection — no free-text
+      // override input rendered alongside it.
+      expect(screen.queryByTestId("agent-model-input")).not.toBeInTheDocument();
+      expect(screen.getByLabelText("SETTINGS$AGENT_EFFORT")).toHaveValue(
+        "SETTINGS$AGENT_EFFORT_HIGH",
+      );
+    });
+
+    it("prefills the custom-model free text with just the base, not the raw composite id", async () => {
+      vi.spyOn(SettingsService, "getSettings").mockResolvedValue(
+        buildSettings({
+          agent_settings: {
+            schema_version: 1,
+            agent_kind: "acp",
+            acp_server: "claude-code",
+            acp_command: [],
+            acp_model: "my-custom-fork/high",
+          },
+        }),
+      );
+
+      renderAgentSettingsScreen();
+      await screen.findByTestId("agent-command-input");
+
+      const modelInput = screen.getByTestId(
+        "agent-model-input",
+      ) as HTMLInputElement;
+      expect(modelInput.value).toBe("my-custom-fork");
+      expect(screen.getByLabelText("SETTINGS$AGENT_EFFORT")).toHaveValue(
+        "SETTINGS$AGENT_EFFORT_HIGH",
+      );
+    });
+
+    it("composes the selected model + effort into a composite acp_model on save", async () => {
+      const user = userEvent.setup();
+      vi.spyOn(SettingsService, "getSettings").mockResolvedValue(
+        buildSettings({
+          agent_settings: {
+            schema_version: 1,
+            agent_kind: "acp",
+            acp_server: "claude-code",
+            acp_command: [],
+            acp_model: null,
+          },
+        }),
+      );
+      const save = vi.spyOn(SettingsService, "saveSettings");
+
+      renderAgentSettingsScreen();
+      await screen.findByTestId("agent-command-input");
+
+      await user.click(screen.getByLabelText("SETTINGS$AGENT_MODEL"));
+      await user.click(await screen.findByText("Claude Sonnet 4.6"));
+
+      await user.click(screen.getByLabelText("SETTINGS$AGENT_EFFORT"));
+      await user.click(await screen.findByText("SETTINGS$AGENT_EFFORT_HIGH"));
+
+      await user.click(screen.getByTestId("agent-save-button"));
+
+      await waitFor(() => {
+        expect(save).toHaveBeenCalledTimes(1);
+      });
+      const call = save.mock.calls[0]?.[0] as {
+        agent_settings_diff?: Record<string, unknown>;
+      };
+      expect(call.agent_settings_diff?.acp_model).toBe("sonnet/high");
+    });
+
+    it("leaves acp_model bare when the effort dropdown stays on Default", async () => {
+      const user = userEvent.setup();
+      vi.spyOn(SettingsService, "getSettings").mockResolvedValue(
+        buildSettings({
+          agent_settings: {
+            schema_version: 1,
+            agent_kind: "acp",
+            acp_server: "claude-code",
+            acp_command: [],
+            acp_model: null,
+          },
+        }),
+      );
+      const save = vi.spyOn(SettingsService, "saveSettings");
+
+      renderAgentSettingsScreen();
+      await screen.findByTestId("agent-command-input");
+
+      await user.click(screen.getByLabelText("SETTINGS$AGENT_MODEL"));
+      await user.click(await screen.findByText("Claude Sonnet 4.6"));
+      // Effort dropdown is left on its default "Default" selection.
+
+      await user.click(screen.getByTestId("agent-save-button"));
+
+      await waitFor(() => {
+        expect(save).toHaveBeenCalledTimes(1);
+      });
+      const call = save.mock.calls[0]?.[0] as {
+        agent_settings_diff?: Record<string, unknown>;
+      };
+      expect(call.agent_settings_diff?.acp_model).toBe("sonnet");
+    });
+
+    it("composes a custom free-text base with an effort level and remembers only the base", async () => {
+      const user = userEvent.setup();
+      vi.spyOn(SettingsService, "getSettings").mockResolvedValue(
+        buildSettings({
+          agent_settings: {
+            schema_version: 1,
+            agent_kind: "acp",
+            acp_server: "claude-code",
+            acp_command: [],
+            acp_model: null,
+          },
+        }),
+      );
+      const save = vi.spyOn(SettingsService, "saveSettings");
+
+      renderAgentSettingsScreen({ profileId: "profile-effort-custom" });
+      await screen.findByTestId("agent-command-input");
+
+      await user.click(screen.getByLabelText("SETTINGS$AGENT_MODEL"));
+      await user.click(
+        await screen.findByRole("option", {
+          name: "SETTINGS$AGENT_PRESET_CUSTOM",
+        }),
+      );
+      await user.type(
+        screen.getByTestId("agent-model-input"),
+        "my-custom-fork",
+      );
+
+      await user.click(screen.getByLabelText("SETTINGS$AGENT_EFFORT"));
+      await user.click(await screen.findByText("SETTINGS$AGENT_EFFORT_MEDIUM"));
+
+      await user.click(screen.getByTestId("agent-save-button"));
+
+      await waitFor(() => {
+        expect(save).toHaveBeenCalledTimes(1);
+      });
+      const call = save.mock.calls[0]?.[0] as {
+        agent_settings_diff?: Record<string, unknown>;
+      };
+      // The composite is what's saved as acp_model...
+      expect(call.agent_settings_diff?.acp_model).toBe("my-custom-fork/medium");
+      // ...but only the bare base is remembered as a reselectable custom
+      // entry — the composite must never leak into the remembered-models
+      // store (it would resurface as an invalid model choice next time).
+      expect(
+        useAcpCustomModelsStore.getState().customModelsByProfileId[
+          "profile-effort-custom"
+        ],
+      ).toEqual(["my-custom-fork"]);
+    });
+
+    it("resets the effort dropdown to Default when switching to a different provider", async () => {
+      const user = userEvent.setup();
+      vi.spyOn(SettingsService, "getSettings").mockResolvedValue(
+        buildSettings({
+          agent_settings: {
+            schema_version: 1,
+            agent_kind: "acp",
+            acp_server: "claude-code",
+            acp_command: [],
+            acp_model: "sonnet/high",
+          },
+        }),
+      );
+
+      renderAgentSettingsScreen();
+      await screen.findByTestId("agent-command-input");
+      expect(screen.getByLabelText("SETTINGS$AGENT_EFFORT")).toHaveValue(
+        "SETTINGS$AGENT_EFFORT_HIGH",
+      );
+
+      await user.click(screen.getByTestId("agent-preset-selector"));
+      await user.click(await screen.findByRole("option", { name: "Codex" }));
+
+      // "high" is a claude-code level; must not silently carry over onto
+      // Codex, where compose would drop it anyway but the visible dropdown
+      // state should be honest about it too.
+      expect(screen.getByLabelText("SETTINGS$AGENT_EFFORT")).toHaveValue(
+        "SETTINGS$AGENT_EFFORT_DEFAULT",
+      );
+    });
+  });
 });
