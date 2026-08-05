@@ -18,7 +18,12 @@ import {
   useAcpModelChoices,
   type AcpModelChoice,
 } from "#/hooks/use-acp-model-choices";
-import { parseAcpModelId } from "#/utils/acp-model-id";
+import {
+  composeAcpModelId,
+  getAcpEffortLevels,
+  parseAcpModelId,
+} from "#/utils/acp-model-id";
+import { useSwitchAcpModel } from "#/hooks/mutation/use-switch-acp-model";
 
 export interface ChatInputModelState {
   isAcpContext: boolean;
@@ -37,6 +42,49 @@ export interface ChatInputModelState {
   switchConversationId: string | null;
   destinationPath: AcpModelContext["destinationPath"];
   destinationLabel: string;
+  /**
+   * The ACP server key backing `currentModelId`/`availableAcpModels` — the
+   * `acpServer` {@link parseAcpModelId}/{@link composeAcpModelId} need to
+   * know which effort suffixes are valid for the running provider. Exposed
+   * so chat-input-model.tsx's `handleSelectAcpModel` can compose the current
+   * effort onto a newly picked base model (M5 effort preservation) without
+   * re-deriving the server key itself.
+   */
+  acpServerKey: string | null;
+  /**
+   * Effort level the effort UI should mark as current. Precedence:
+   * the session's live `acp_current_effort` (threaded in M3, only meaningful
+   * inside an active ACP conversation) → the effort parsed off a composite
+   * `currentModelId` (e.g. "sonnet/high" → "high", via
+   * {@link parseAcpModelId}) → the UI-only `"default"` sentinel
+   * {@link composeAcpModelId} treats as "no suffix". Always a concrete
+   * string so callers never need a null check to compare against a picker
+   * row.
+   */
+  currentEffort: string;
+  /**
+   * Effort levels the effort UI should offer, or `null` to hide it entirely.
+   * Prefers the session's live `acp_available_efforts` when the server
+   * reports any (already includes the `"default"` sentinel — see
+   * `AppConversation.acp_available_efforts`); falls back to the static
+   * per-server list from {@link getAcpEffortLevels}. Gated identically to
+   * `showAcpPicker` — an effort section should never render somewhere the
+   * model list itself wouldn't (same ACP-context + cloud-permission gating).
+   */
+  availableEfforts: string[] | null;
+  /**
+   * Switch the live/default effort level, holding the current base model
+   * fixed — the effort analog of picking a row in `availableAcpModels`. A
+   * no-op when `effort` already equals `currentEffort` (or there's no
+   * current base model to compose onto). Composes `currentModelBaseId` +
+   * `effort` back into the raw ACP model id via {@link composeAcpModelId}
+   * and routes through the same `useSwitchAcpModel` mutation a base-model
+   * pick uses — live in-session when `switchConversationId` is set,
+   * persisted to the active profile / legacy agent_settings on the home
+   * page otherwise (identical dual-target behavior to a model pick, since
+   * it's the same mutation).
+   */
+  handleSelectAcpEffort: (effort: string) => void;
 }
 
 export function useChatInputModelState(): ChatInputModelState {
@@ -45,6 +93,7 @@ export function useChatInputModelState(): ChatInputModelState {
   const { conversationId } = useOptionalConversationId();
   const { backend } = useActiveBackend();
   const canManageOrgProfiles = useCanManageOrgProfiles();
+  const switchAcpModel = useSwitchAcpModel();
   // The active ACP AgentProfile's own fields are the conversation launch
   // source (activation never writes agent_settings, so the global settings
   // may describe a different provider). Null in a conversation, while
@@ -131,6 +180,17 @@ export function useChatInputModelState(): ChatInputModelState {
     ? conversation?.acp_live_models
     : undefined;
 
+  // Live effort fields (agent-canvas M5) — same session-only gating as
+  // liveModels above: undefined on the home page (no running session) and
+  // for a non-ACP active conversation (the adapter already nulls both there,
+  // but the explicit gate documents the intent regardless).
+  const liveCurrentEffort = isActiveAcpConversation
+    ? conversation?.acp_current_effort
+    : undefined;
+  const liveAvailableEfforts = isActiveAcpConversation
+    ? conversation?.acp_available_efforts
+    : undefined;
+
   const { choices: availableAcpModels } = useAcpModelChoices({
     acpServer: acpServerKey,
     curated: acpProvider?.available_models ?? [],
@@ -157,6 +217,30 @@ export function useChatInputModelState(): ChatInputModelState {
     ? (conversationId ?? null)
     : null;
 
+  const currentEffort =
+    liveCurrentEffort ??
+    (currentModelId
+      ? parseAcpModelId(currentModelId, acpServerKey).effort
+      : null) ??
+    "default";
+
+  // Only expose effort switching wherever the model picker itself is shown
+  // (same ACP-context + cloud-permission gating as showAcpPicker) — an
+  // effort section with no model list to sit under wouldn't make sense.
+  const availableEfforts = showAcpPicker
+    ? liveAvailableEfforts && liveAvailableEfforts.length > 0
+      ? liveAvailableEfforts
+      : getAcpEffortLevels(acpServerKey)
+    : null;
+
+  const handleSelectAcpEffort = (effort: string) => {
+    if (!currentModelBaseId || effort === currentEffort) return;
+    switchAcpModel.mutate({
+      conversationId: switchConversationId,
+      model: composeAcpModelId(currentModelBaseId, effort, acpServerKey),
+    });
+  };
+
   return {
     isAcpContext,
     displayModel,
@@ -167,5 +251,9 @@ export function useChatInputModelState(): ChatInputModelState {
     switchConversationId,
     destinationPath,
     destinationLabel,
+    acpServerKey: acpServerKey ?? null,
+    currentEffort,
+    availableEfforts,
+    handleSelectAcpEffort,
   };
 }

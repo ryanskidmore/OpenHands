@@ -427,7 +427,7 @@ describe("ChatInputModel", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("switching to a different base model from a composite session model drops the old effort", () => {
+  it("switching to a different base model from a composite session model preserves the current effort (M5)", () => {
     useActiveConversationMock.mockReturnValue({
       data: {
         conversation_id: "test-conversation-id",
@@ -441,11 +441,177 @@ describe("ChatInputModel", () => {
     fireEvent.click(screen.getByTestId("chat-input-llm-model"));
     fireEvent.click(screen.getByTestId("chat-input-acp-model-option-opus[1m]"));
 
-    // The new model is sent as the bare id — there is no "high" suffix to
-    // carry over (M5 will own preserving/re-selecting an effort).
+    // The current "high" effort rides along onto the newly picked base via
+    // composeAcpModelId — upgraded from M3's "drop it" behavior.
     expect(switchAcpModelMutate).toHaveBeenCalledWith({
       conversationId: "test-conversation-id",
-      model: "opus[1m]",
+      model: "opus[1m]/high",
+    });
+  });
+
+  describe("M5: effort switching", () => {
+    it("renders an effort section for a claude-code conversation, with the current effort checked", () => {
+      useActiveConversationMock.mockReturnValue({
+        data: {
+          conversation_id: "test-conversation-id",
+          agent_kind: "acp",
+          acp_server: "claude-code",
+          llm_model: "sonnet/high",
+        },
+      });
+
+      renderWithProviders(<ChatInputModel />);
+      fireEvent.click(screen.getByTestId("chat-input-llm-model"));
+
+      expect(
+        screen.getByTestId("chat-input-acp-effort-option-default"),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByTestId("chat-input-acp-effort-option-low"),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByTestId("chat-input-acp-effort-option-max"),
+      ).toBeInTheDocument();
+      // The running effort ("high") is the one marked selected.
+      expect(
+        screen.getByTestId("chat-input-acp-effort-option-high"),
+      ).toHaveClass("bg-[var(--oh-interactive-hover)]");
+      expect(
+        screen.getByTestId("chat-input-acp-effort-option-default"),
+      ).not.toHaveClass("bg-[var(--oh-interactive-hover)]");
+    });
+
+    it("hides the effort section for a server with no recognized effort levels (gemini-cli)", () => {
+      useActiveConversationMock.mockReturnValue({
+        data: {
+          conversation_id: "test-conversation-id",
+          agent_kind: "acp",
+          acp_server: "gemini-cli",
+          llm_model: "gemini-2.5-pro",
+        },
+      });
+
+      renderWithProviders(<ChatInputModel />);
+      fireEvent.click(screen.getByTestId("chat-input-llm-model"));
+
+      // Model rows are still offered...
+      expect(
+        screen.getByTestId("chat-input-acp-model-option-gemini-2.5-pro"),
+      ).toBeInTheDocument();
+      // ...but there is no effort section for this server.
+      expect(
+        screen.queryByTestId("chat-input-acp-effort-option-default"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("hides the effort section for a custom server with no live-reported efforts", () => {
+      useActiveConversationMock.mockReturnValue({
+        data: {
+          conversation_id: "test-conversation-id",
+          agent_kind: "acp",
+          acp_server: "custom",
+          llm_model: "my-model",
+          acp_live_models: [{ id: "my-model", label: "my-model" }],
+        },
+      });
+
+      renderWithProviders(<ChatInputModel />);
+      fireEvent.click(screen.getByTestId("chat-input-llm-model"));
+
+      expect(
+        screen.getByTestId("chat-input-acp-model-option-my-model"),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByTestId("chat-input-acp-effort-option-default"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("shows a live-reported effort section for a custom server that reports available efforts", () => {
+      useActiveConversationMock.mockReturnValue({
+        data: {
+          conversation_id: "test-conversation-id",
+          agent_kind: "acp",
+          acp_server: "custom",
+          llm_model: "my-model",
+          acp_live_models: [{ id: "my-model", label: "my-model" }],
+          acp_available_efforts: ["default", "turbo"],
+        },
+      });
+
+      renderWithProviders(<ChatInputModel />);
+      fireEvent.click(screen.getByTestId("chat-input-llm-model"));
+
+      expect(
+        screen.getByTestId("chat-input-acp-effort-option-default"),
+      ).toBeInTheDocument();
+      // "turbo" has no i18n key mirrored in Canvas's static map — the raw
+      // value renders instead of guessing at a translation.
+      const turboRow = screen.getByTestId("chat-input-acp-effort-option-turbo");
+      expect(turboRow).toBeInTheDocument();
+      expect(turboRow).toHaveTextContent("turbo");
+    });
+
+    it("live-switches the effort when a row is selected in an active ACP conversation", () => {
+      useActiveConversationMock.mockReturnValue({
+        data: {
+          conversation_id: "test-conversation-id",
+          agent_kind: "acp",
+          acp_server: "claude-code",
+          llm_model: "sonnet",
+        },
+      });
+
+      renderWithProviders(<ChatInputModel />);
+      fireEvent.click(screen.getByTestId("chat-input-llm-model"));
+      fireEvent.click(screen.getByTestId("chat-input-acp-effort-option-high"));
+
+      expect(switchAcpModelMutate).toHaveBeenCalledWith({
+        conversationId: "test-conversation-id",
+        model: "sonnet/high",
+      });
+      // Popover closes after a selection, same as a model pick.
+      expect(
+        screen.queryByTestId("chat-input-llm-model-popover"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("does not re-switch when selecting the already-current effort", () => {
+      useActiveConversationMock.mockReturnValue({
+        data: {
+          conversation_id: "test-conversation-id",
+          agent_kind: "acp",
+          acp_server: "claude-code",
+          llm_model: "sonnet/high",
+        },
+      });
+
+      renderWithProviders(<ChatInputModel />);
+      fireEvent.click(screen.getByTestId("chat-input-llm-model"));
+      fireEvent.click(screen.getByTestId("chat-input-acp-effort-option-high"));
+
+      expect(switchAcpModelMutate).not.toHaveBeenCalled();
+    });
+
+    it("persists the effort choice as the default (conversationId null) in the home ACP case", () => {
+      useActiveConversationMock.mockReturnValue({ data: undefined });
+      useSettingsMock.mockReturnValue({
+        data: {
+          agent_settings: {
+            agent_kind: "acp",
+            acp_server: "claude-code",
+            acp_model: "sonnet",
+          },
+        },
+      });
+
+      renderWithProviders(<ChatInputModel />);
+      fireEvent.click(screen.getByTestId("chat-input-llm-model"));
+      fireEvent.click(screen.getByTestId("chat-input-acp-effort-option-max"));
+
+      expect(switchAcpModelMutate).toHaveBeenCalledWith({
+        conversationId: null,
+        model: "sonnet/max",
+      });
     });
   });
 });

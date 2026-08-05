@@ -7,7 +7,8 @@
  * the selectable base model — {@link parseAcpModelId} does that split;
  * {@link composeAcpModelId} builds the composite back up for Save, and
  * {@link getAcpEffortLevels} lists the levels the effort UI should offer.
- * M5 (live in-session effort switching) is still separate.
+ * Both Settings → Agent's effort dropdown (M4) and the chat-input
+ * pill's mid-session effort switcher (M5) build on these three functions.
  *
  * Only claude-code and codex compose ids this way, and only with a suffix
  * that's actually one of *that server's* known effort levels — gemini-cli,
