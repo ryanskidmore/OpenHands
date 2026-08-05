@@ -1,5 +1,6 @@
 import { getAcpProvider as getClientAcpProvider } from "@openhands/typescript-client";
 import { I18nKey } from "#/i18n/declaration";
+import { parseAcpModelId } from "#/utils/acp-model-id";
 
 export type ACPProviderIcon =
   | "claude-code"
@@ -448,11 +449,24 @@ export function resolveAcpProviderIcon(
  * Resolve a raw ``acp_model`` ID to the human-readable label the provider's
  * picker shows for it (e.g. ``"claude-opus-4-7"`` → ``"Claude Opus 4.7"``).
  *
- * Falls back to the raw ID when the provider is unknown or the ID isn't one
- * of its registered {@link ACPModelOption}s — so a user's custom override
- * still renders something meaningful rather than nothing. Returns ``null``
- * only when there is no model to show, letting the conversation chip decide
- * to display the provider name instead.
+ * A composite ``"<base>/<effort>"`` id (claude-code / codex — see
+ * {@link parseAcpModelId}) is split first via ``serverKey``, which this
+ * function already receives, so the split is exactly as safe as every
+ * other consumer's (no separate "union of all known effort sets" fallback
+ * needed) — only claude-code/codex ids with a suffix that's actually one of
+ * *that server's* effort levels are ever split; everything else (gemini-cli,
+ * custom, an unknown server, or an unrecognized suffix) passes through
+ * whole. The base is looked up in the registry as before; a split effort is
+ * appended as ``"<label> · <effort>"`` (e.g. ``"Claude Sonnet 4.6 · high"``)
+ * — the raw level, not translated: this is a plain utility with no i18n
+ * context, and it already renders registry labels (e.g. "Claude Opus 4.7")
+ * untranslated, so an untranslated effort suffix stays consistent with that.
+ *
+ * Falls back to the raw base when the provider is unknown or the base isn't
+ * one of its registered {@link ACPModelOption}s — so a user's custom
+ * override still renders something meaningful rather than nothing. Returns
+ * ``null`` only when there is no model to show, letting the conversation
+ * chip decide to display the provider name instead.
  */
 export function labelForAcpModel(
   serverKey: string | null | undefined,
@@ -460,8 +474,10 @@ export function labelForAcpModel(
 ): string | null {
   if (!modelId) return null;
   const provider = getAcpProvider(serverKey);
-  const match = provider?.available_models?.find((m) => m.id === modelId);
-  return match?.label ?? modelId;
+  const { base, effort } = parseAcpModelId(modelId, serverKey);
+  const match = provider?.available_models?.find((m) => m.id === base);
+  const baseLabel = match?.label ?? base;
+  return effort ? `${baseLabel} · ${effort}` : baseLabel;
 }
 
 /**

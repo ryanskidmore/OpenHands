@@ -41,6 +41,11 @@ import {
 import { parseCommand, formatCommand } from "#/utils/acp-command";
 import { useAcpModelChoices } from "#/hooks/use-acp-model-choices";
 import { useAcpCustomModelsStore } from "#/stores/acp-custom-models-store";
+import {
+  composeAcpModelId,
+  getAcpEffortLevels,
+  parseAcpModelId,
+} from "#/utils/acp-model-id";
 
 export const handle = { hideTitle: true };
 
@@ -50,6 +55,21 @@ const ENABLE_SUB_AGENTS_FIELD_KEY = "enable_sub_agents";
 const TOOL_CONCURRENCY_FIELD_KEY = "tool_concurrency_limit";
 const COMMAND_PLACEHOLDER_FALLBACK = "npx -y <package-name>";
 const ACP_CUSTOM_MODEL_KEY = "__custom_model__";
+/** UI sentinel for "no effort suffix" — {@link composeAcpModelId} treats this
+ * identically to `null`/empty (bare `acp_model`, no trailing "/<effort>"). */
+const ACP_EFFORT_DEFAULT = "default";
+
+/** i18n keys for each {@link getAcpEffortLevels} level, including the
+ * "default" sentinel — kept local to this route since it's the only surface
+ * that renders effort levels as picker text. */
+const ACP_EFFORT_LEVEL_I18N_KEYS: Record<string, I18nKey> = {
+  [ACP_EFFORT_DEFAULT]: I18nKey.SETTINGS$AGENT_EFFORT_DEFAULT,
+  low: I18nKey.SETTINGS$AGENT_EFFORT_LOW,
+  medium: I18nKey.SETTINGS$AGENT_EFFORT_MEDIUM,
+  high: I18nKey.SETTINGS$AGENT_EFFORT_HIGH,
+  xhigh: I18nKey.SETTINGS$AGENT_EFFORT_XHIGH,
+  max: I18nKey.SETTINGS$AGENT_EFFORT_MAX,
+};
 
 function toStringArray(value: unknown): string[] {
   return Array.isArray(value)
@@ -118,6 +138,11 @@ export interface AgentProfileFieldsInput {
   isDefaultProviderCommand: boolean;
   commandTokens: string[];
   acpModel: string;
+  /** Effort level selected in the effort dropdown ("default" or one of
+   * {@link getAcpEffortLevels}'s levels for `selectedPreset`). Composed onto
+   * `acpModel` via {@link composeAcpModelId} — ignored (never suffixed) for
+   * a server {@link getAcpEffortLevels} returns `null` for. */
+  acpEffort: string;
   subAgentsEnabled: boolean;
   toolConcurrencyField?: SettingsFieldSchema;
   toolConcurrency: string | boolean;
@@ -150,6 +175,7 @@ export function buildAgentProfileFields(
     isDefaultProviderCommand,
     commandTokens,
     acpModel,
+    acpEffort,
     subAgentsEnabled,
     toolConcurrencyField,
     toolConcurrency,
@@ -160,7 +186,8 @@ export function buildAgentProfileFields(
     return {
       agent_kind: "acp",
       acp_server: selectedPreset,
-      acp_model: acpModel.trim() || null,
+      acp_model:
+        composeAcpModelId(acpModel.trim(), acpEffort, selectedPreset) || null,
       acp_command: isBuiltinDefault
         ? null
         : formatCommand(commandTokens) || null,
@@ -288,6 +315,7 @@ export function AgentSettingsScreen({
   const [agentType, setAgentType] = useState<AgentType>("openhands");
   const [commandText, setCommandText] = useState("");
   const [acpModel, setAcpModel] = useState("");
+  const [acpEffort, setAcpEffort] = useState(ACP_EFFORT_DEFAULT);
   const [isCustomAcpModel, setIsCustomAcpModel] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
 
@@ -343,9 +371,16 @@ export function AgentSettingsScreen({
       const savedModel = source?.acp_model;
       const normalizedSavedModel =
         typeof savedModel === "string" ? savedModel.trim() : "";
-      setAcpModel(
-        normalizedSavedModel || getAcpPreferredDefaultModel(acpServer) || "",
-      );
+      const effectiveSavedModel =
+        normalizedSavedModel || getAcpPreferredDefaultModel(acpServer) || "";
+      // CRITICAL: parse the composite id BEFORE the known-model check below —
+      // isKnownModelId must see the bare base, or a composite id like
+      // "sonnet/high" would never match the curated list and would
+      // incorrectly flip the UI to the custom free-text input instead of
+      // preselecting "Sonnet" with "high" in the effort dropdown.
+      const parsedSavedModel = parseAcpModelId(effectiveSavedModel, acpServer);
+      setAcpModel(parsedSavedModel.base);
+      setAcpEffort(parsedSavedModel.effort ?? ACP_EFFORT_DEFAULT);
       // A model is "known" (shows selected in the dropdown, not the free-text
       // override) when it's either curated or a remembered custom entry for
       // this profile — both synchronously available, unlike the async
@@ -360,13 +395,14 @@ export function AgentSettingsScreen({
         !!normalizedSavedModel &&
           !isKnownModelId(
             [...curatedIds, ...customIdsForProfile],
-            normalizedSavedModel,
+            parsedSavedModel.base,
           ),
       );
     } else {
       setAgentType("openhands");
       setCommandText("");
       setAcpModel("");
+      setAcpEffort(ACP_EFFORT_DEFAULT);
       loadedAcpServerRef.current = null;
       loadedCommandTextRef.current = "";
       setIsCustomAcpModel(false);
@@ -458,6 +494,11 @@ export function AgentSettingsScreen({
     isCustomAcpModel || !selectedModelIsSuggestion
       ? ACP_CUSTOM_MODEL_KEY
       : acpModel;
+  // Effort UI only exists for servers that recognize a "<base>/<effort>"
+  // suffix (claude-code, codex) — null for gemini-cli, custom, and any
+  // unknown server, which hides the dropdown entirely rather than offering
+  // a single useless "Default" choice.
+  const acpEffortLevels = getAcpEffortLevels(selectedPreset);
   const isDefaultProviderCommand =
     !!selectedProvider &&
     commandTokens.join(" ") === selectedProvider.default_command.join(" ");
@@ -488,6 +529,7 @@ export function AgentSettingsScreen({
       isDefaultProviderCommand,
       commandTokens,
       acpModel,
+      acpEffort,
       subAgentsEnabled,
       toolConcurrencyField,
       toolConcurrency,
@@ -542,10 +584,16 @@ export function AgentSettingsScreen({
           : ACP_CUSTOM_PRESET_KEY;
       // ``model: undefined`` lets buildAcpAgentSettingsDiff seed the
       // provider's preferred default for built-in keys; for the custom preset
-      // it falls through to ``null`` since custom has no default.
+      // it falls through to ``null`` since custom has no default. A blank
+      // base stays blank (never gets an effort suffix composed onto it) so
+      // that fallback still kicks in.
+      const trimmedAcpModel = acpModel.trim();
+      const composedAcpModel = trimmedAcpModel
+        ? composeAcpModelId(trimmedAcpModel, acpEffort, providerKey)
+        : trimmedAcpModel;
       const agentSettingsDiff = buildAcpAgentSettingsDiff(providerKey, {
         command: useDefault ? [] : commandTokens,
-        model: acpModel.trim() || undefined,
+        model: composedAcpModel || undefined,
         allowUnknownServer: preserveUnknownServer,
       });
 
@@ -660,6 +708,7 @@ export function AgentSettingsScreen({
               setCommandText(formatCommand(preferred.default_command));
               setAcpModel(getAcpPreferredDefaultModel(preferred.key) ?? "");
               setIsCustomAcpModel(false);
+              setAcpEffort(ACP_EFFORT_DEFAULT);
             }
           } else if (newType === "openhands") {
             setIsCustomAcpModel(false);
@@ -726,6 +775,11 @@ export function AgentSettingsScreen({
                 setCommandText(formatCommand(provider.default_command));
                 setAcpModel(getAcpPreferredDefaultModel(preset) ?? "");
                 setIsCustomAcpModel(false);
+                // A different provider may not support the previously
+                // selected effort level at all (or support a different set)
+                // — reset to Default rather than risk leaking e.g. claude's
+                // "max" onto Codex, where compose would silently drop it.
+                setAcpEffort(ACP_EFFORT_DEFAULT);
               } else if (preset === ACP_CUSTOM_PRESET_KEY) {
                 // Clear command + model: the previous provider's default
                 // command would otherwise make detectPreset(commandText)
@@ -736,6 +790,7 @@ export function AgentSettingsScreen({
                 setCommandText("");
                 setAcpModel("");
                 setIsCustomAcpModel(true);
+                setAcpEffort(ACP_EFFORT_DEFAULT);
               }
               setIsDirty(true);
             }}
@@ -767,6 +822,7 @@ export function AgentSettingsScreen({
                 if (nextPreset !== prevPreset) {
                   setAcpModel(getAcpPreferredDefaultModel(nextPreset) ?? "");
                   setIsCustomAcpModel(false);
+                  setAcpEffort(ACP_EFFORT_DEFAULT);
                 }
                 setCommandText(nextCommandText);
                 setIsDirty(true);
@@ -833,6 +889,32 @@ export function AgentSettingsScreen({
               {t(I18nKey.SETTINGS$AGENT_MODEL_HINT)}
             </Typography.Text>
           </div>
+
+          {acpEffortLevels && (
+            <div className="flex flex-col gap-1.5">
+              <SettingsDropdownInput
+                testId="agent-effort-selector"
+                name="agent-effort"
+                label={t(I18nKey.SETTINGS$AGENT_EFFORT)}
+                items={acpEffortLevels.map((level) => ({
+                  key: level,
+                  label: t(
+                    ACP_EFFORT_LEVEL_I18N_KEYS[level] ??
+                      I18nKey.SETTINGS$AGENT_EFFORT_DEFAULT,
+                  ),
+                }))}
+                selectedKey={acpEffort}
+                onSelectionChange={(key) => {
+                  if (!key) return;
+                  setAcpEffort(String(key));
+                  setIsDirty(true);
+                }}
+              />
+              <Typography.Text className="text-xs text-[#717888]">
+                {t(I18nKey.SETTINGS$AGENT_EFFORT_HINT)}
+              </Typography.Text>
+            </div>
+          )}
         </>
       )}
 
