@@ -33,6 +33,7 @@ import {
 import {
   ACP_PROVIDERS,
   ACP_CUSTOM_PRESET_KEY,
+  ACP_EFFORT_LEVEL_I18N_KEYS,
   buildAcpAgentSettingsDiff,
   getAcpPreferredDefaultModel,
   getAcpProvider,
@@ -58,18 +59,6 @@ const ACP_CUSTOM_MODEL_KEY = "__custom_model__";
 /** UI sentinel for "no effort suffix" — {@link composeAcpModelId} treats this
  * identically to `null`/empty (bare `acp_model`, no trailing "/<effort>"). */
 const ACP_EFFORT_DEFAULT = "default";
-
-/** i18n keys for each {@link getAcpEffortLevels} level, including the
- * "default" sentinel — kept local to this route since it's the only surface
- * that renders effort levels as picker text. */
-const ACP_EFFORT_LEVEL_I18N_KEYS: Record<string, I18nKey> = {
-  [ACP_EFFORT_DEFAULT]: I18nKey.SETTINGS$AGENT_EFFORT_DEFAULT,
-  low: I18nKey.SETTINGS$AGENT_EFFORT_LOW,
-  medium: I18nKey.SETTINGS$AGENT_EFFORT_MEDIUM,
-  high: I18nKey.SETTINGS$AGENT_EFFORT_HIGH,
-  xhigh: I18nKey.SETTINGS$AGENT_EFFORT_XHIGH,
-  max: I18nKey.SETTINGS$AGENT_EFFORT_MAX,
-};
 
 function toStringArray(value: unknown): string[] {
   return Array.isArray(value)

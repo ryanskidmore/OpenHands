@@ -83,6 +83,14 @@ vi.mock("#/hooks/use-can-manage-org-profiles", () => ({
   useCanManageOrgProfiles: () => useCanManageOrgProfilesMock(),
 }));
 
+// M5: the hook now owns the effort-switch mutation call itself
+// (handleSelectAcpEffort), so it needs the same mutate mock the component
+// test file uses for handleSelectAcpModel.
+const switchAcpModelMutate = vi.fn();
+vi.mock("#/hooks/mutation/use-switch-acp-model", () => ({
+  useSwitchAcpModel: () => ({ mutate: switchAcpModelMutate }),
+}));
+
 // `getAcpProvider`/`labelForAcpModel`/`resolveEffectiveAcpModel` are exercised
 // for real (not mocked) so the test pins the actual registry-sourced model
 // list the picker shows.
@@ -118,6 +126,7 @@ describe("useChatInputModelState", () => {
     useActiveAcpProfileDetailMock.mockReturnValue(null);
     useCanManageOrgProfilesMock.mockReset();
     useCanManageOrgProfilesMock.mockReturnValue(true);
+    switchAcpModelMutate.mockReset();
     // Never resolves by default: catalogStatus stays "loading" so
     // availableAcpModels stays curated(+live/custom)-only without every test
     // needing `waitFor` — matches what these tests actually want to pin.
@@ -533,6 +542,292 @@ describe("useChatInputModelState", () => {
 
       expect(result.current.currentModelId).toBe("gemini-2.5-pro/high");
       expect(result.current.currentModelBaseId).toBe("gemini-2.5-pro/high");
+    });
+  });
+
+  describe("M5: effort switching", () => {
+    it("currentEffort prefers the live acp_current_effort over parsing the composite currentModelId", () => {
+      useActiveConversationMock.mockReturnValue({
+        data: {
+          conversation_id: "c1",
+          agent_kind: "acp",
+          acp_server: "claude-code",
+          llm_model: "sonnet/high",
+          acp_current_effort: "medium",
+        },
+      });
+      useAcpModelContextMock.mockReturnValue(
+        acpContext({ isActiveAcpConversation: true, isAcpContext: true }),
+      );
+
+      const { result } = renderHook(() => useChatInputModelState(), {
+        wrapper: createWrapper(),
+      });
+
+      // Live field wins even though the session id itself says "high".
+      expect(result.current.currentEffort).toBe("medium");
+    });
+
+    it("currentEffort falls back to parsing a composite currentModelId when no live effort is reported", () => {
+      useActiveConversationMock.mockReturnValue({
+        data: {
+          conversation_id: "c1",
+          agent_kind: "acp",
+          acp_server: "claude-code",
+          llm_model: "sonnet/high",
+        },
+      });
+      useAcpModelContextMock.mockReturnValue(
+        acpContext({ isActiveAcpConversation: true, isAcpContext: true }),
+      );
+
+      const { result } = renderHook(() => useChatInputModelState(), {
+        wrapper: createWrapper(),
+      });
+
+      expect(result.current.currentEffort).toBe("high");
+    });
+
+    it('currentEffort falls back to "default" when neither a live effort nor a composite id is present', () => {
+      useActiveConversationMock.mockReturnValue({
+        data: {
+          conversation_id: "c1",
+          agent_kind: "acp",
+          acp_server: "claude-code",
+          llm_model: "sonnet",
+        },
+      });
+      useAcpModelContextMock.mockReturnValue(
+        acpContext({ isActiveAcpConversation: true, isAcpContext: true }),
+      );
+
+      const { result } = renderHook(() => useChatInputModelState(), {
+        wrapper: createWrapper(),
+      });
+
+      expect(result.current.currentEffort).toBe("default");
+    });
+
+    it("home ACP: currentEffort parses a saved composite acp_model when there is no active session", () => {
+      useActiveConversationMock.mockReturnValue({ data: undefined });
+      useSettingsMock.mockReturnValue({
+        data: {
+          agent_settings: {
+            agent_kind: "acp",
+            acp_server: "claude-code",
+            acp_model: "claude-sonnet-4-6/xhigh",
+          },
+        },
+      });
+      useAcpModelContextMock.mockReturnValue(
+        acpContext({ isHomeAcp: true, isAcpContext: true }),
+      );
+
+      const { result } = renderHook(() => useChatInputModelState(), {
+        wrapper: createWrapper(),
+      });
+
+      expect(result.current.currentEffort).toBe("xhigh");
+    });
+
+    it("availableEfforts prefers the live acp_available_efforts when non-empty, over the static per-server list", () => {
+      useActiveConversationMock.mockReturnValue({
+        data: {
+          conversation_id: "c1",
+          agent_kind: "acp",
+          acp_server: "claude-code",
+          llm_model: "sonnet",
+          acp_available_efforts: ["default", "medium"],
+        },
+      });
+      useAcpModelContextMock.mockReturnValue(
+        acpContext({ isActiveAcpConversation: true, isAcpContext: true }),
+      );
+
+      const { result } = renderHook(() => useChatInputModelState(), {
+        wrapper: createWrapper(),
+      });
+
+      // The static claude-code list has more levels than this — the live
+      // value must win, not just be merged/ignored.
+      expect(result.current.availableEfforts).toEqual(["default", "medium"]);
+    });
+
+    it("availableEfforts falls back to the static per-server list when the live session reports no efforts", () => {
+      useActiveConversationMock.mockReturnValue({
+        data: {
+          conversation_id: "c1",
+          agent_kind: "acp",
+          acp_server: "claude-code",
+          llm_model: "sonnet",
+        },
+      });
+      useAcpModelContextMock.mockReturnValue(
+        acpContext({ isActiveAcpConversation: true, isAcpContext: true }),
+      );
+
+      const { result } = renderHook(() => useChatInputModelState(), {
+        wrapper: createWrapper(),
+      });
+
+      expect(result.current.availableEfforts).toEqual([
+        "default",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+      ]);
+    });
+
+    it("availableEfforts falls back to the static list when the live session reports an empty array", () => {
+      useActiveConversationMock.mockReturnValue({
+        data: {
+          conversation_id: "c1",
+          agent_kind: "acp",
+          acp_server: "codex",
+          llm_model: "gpt-5.5",
+          acp_available_efforts: [],
+        },
+      });
+      useAcpModelContextMock.mockReturnValue(
+        acpContext({ isActiveAcpConversation: true, isAcpContext: true }),
+      );
+
+      const { result } = renderHook(() => useChatInputModelState(), {
+        wrapper: createWrapper(),
+      });
+
+      expect(result.current.availableEfforts).toEqual([
+        "default",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+      ]);
+    });
+
+    it("availableEfforts is null for a server with no recognized effort levels (gemini-cli)", () => {
+      useActiveConversationMock.mockReturnValue({
+        data: {
+          conversation_id: "c1",
+          agent_kind: "acp",
+          acp_server: "gemini-cli",
+          llm_model: "gemini-2.5-pro",
+        },
+      });
+      useAcpModelContextMock.mockReturnValue(
+        acpContext({ isActiveAcpConversation: true, isAcpContext: true }),
+      );
+
+      const { result } = renderHook(() => useChatInputModelState(), {
+        wrapper: createWrapper(),
+      });
+
+      expect(result.current.showAcpPicker).toBe(true);
+      expect(result.current.availableEfforts).toBeNull();
+    });
+
+    it("availableEfforts is null whenever the model picker itself is hidden (same cloud gating as showAcpPicker)", () => {
+      // Mirrors the existing "hides the selectable rows" showAcpPicker test:
+      // a cloud member who can't manage org profiles gets no picker, and
+      // therefore no effort section either, even though claude-code has
+      // recognized effort levels.
+      useActiveBackendMock.mockReturnValue({ backend: { kind: "cloud" } });
+      useCanManageOrgProfilesMock.mockReturnValue(false);
+      useActiveConversationMock.mockReturnValue({ data: undefined });
+      useSettingsMock.mockReturnValue({
+        data: {
+          agent_settings: { agent_kind: "acp", acp_server: "claude-code" },
+        },
+      });
+      useAcpModelContextMock.mockReturnValue(
+        acpContext({ isHomeAcp: true, isAcpContext: true }),
+      );
+
+      const { result } = renderHook(() => useChatInputModelState(), {
+        wrapper: createWrapper(),
+      });
+
+      expect(result.current.showAcpPicker).toBe(false);
+      expect(result.current.availableEfforts).toBeNull();
+    });
+
+    it("handleSelectAcpEffort composes the current base model with the new effort and live-switches", () => {
+      useActiveConversationMock.mockReturnValue({
+        data: {
+          conversation_id: "c1",
+          agent_kind: "acp",
+          acp_server: "claude-code",
+          llm_model: "sonnet",
+        },
+      });
+      useOptionalConversationIdMock.mockReturnValue({ conversationId: "c1" });
+      useAcpModelContextMock.mockReturnValue(
+        acpContext({ isActiveAcpConversation: true, isAcpContext: true }),
+      );
+
+      const { result } = renderHook(() => useChatInputModelState(), {
+        wrapper: createWrapper(),
+      });
+
+      result.current.handleSelectAcpEffort("high");
+
+      expect(switchAcpModelMutate).toHaveBeenCalledWith({
+        conversationId: "c1",
+        model: "sonnet/high",
+      });
+    });
+
+    it("handleSelectAcpEffort is a no-op when selecting the already-current effort", () => {
+      useActiveConversationMock.mockReturnValue({
+        data: {
+          conversation_id: "c1",
+          agent_kind: "acp",
+          acp_server: "claude-code",
+          llm_model: "sonnet/high",
+        },
+      });
+      useOptionalConversationIdMock.mockReturnValue({ conversationId: "c1" });
+      useAcpModelContextMock.mockReturnValue(
+        acpContext({ isActiveAcpConversation: true, isAcpContext: true }),
+      );
+
+      const { result } = renderHook(() => useChatInputModelState(), {
+        wrapper: createWrapper(),
+      });
+
+      result.current.handleSelectAcpEffort("high");
+
+      expect(switchAcpModelMutate).not.toHaveBeenCalled();
+    });
+
+    it("handleSelectAcpEffort persists to the profile (conversationId null) on the home page, same as a model pick", () => {
+      useActiveConversationMock.mockReturnValue({ data: undefined });
+      useSettingsMock.mockReturnValue({
+        data: {
+          agent_settings: {
+            agent_kind: "acp",
+            acp_server: "claude-code",
+            acp_model: "claude-sonnet-4-6",
+          },
+        },
+      });
+      useOptionalConversationIdMock.mockReturnValue({ conversationId: null });
+      useAcpModelContextMock.mockReturnValue(
+        acpContext({ isHomeAcp: true, isAcpContext: true }),
+      );
+
+      const { result } = renderHook(() => useChatInputModelState(), {
+        wrapper: createWrapper(),
+      });
+
+      result.current.handleSelectAcpEffort("xhigh");
+
+      expect(switchAcpModelMutate).toHaveBeenCalledWith({
+        conversationId: null,
+        model: "claude-sonnet-4-6/xhigh",
+      });
     });
   });
 });
