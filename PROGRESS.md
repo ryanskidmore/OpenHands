@@ -30,15 +30,23 @@ fork. Never touch `main`; never self-merge PRs — Ryan reviews/merges.
       to a call site (follow-up in M3/M6). Known pre-existing flake:
       `__tests__/scripts/dev-with-automation.test.ts` SIGHUP test fails in
       this sandbox, unrelated to this work.
-- [ ] **M3** dynamic chat pill incl. custom-server picker
+- [x] **M3** dynamic chat pill incl. custom-server picker — live
+      ConversationInfo.available_models (typed in ts-client 1.36.1!) merged
+      via use-acp-model-choices; composite current-id highlights base entry
+      (`src/utils/acp-model-id.ts` parse utility); catalog fetch gated to
+      ACP contexts; acp_current_effort/available_efforts threaded (no UI
+      yet — M5 consumes). Profile id from launched_agent_profile.
 - [ ] **M4** effort foundation: encode/parse utility + capability flags + settings UI
 - [ ] **M5** mid-session model+effort switcher
 - [ ] **M6** hardening: mock ACP server extensions, docs, full suites green
 - [ ] **Phase B (SDK fork)** — revised scope in "Phase B scope" below
   - [x] B1 claude effort splitter — ryanskidmore/software-agent-sdk#1
         (446 SDK ACP tests pass; current_model_id keeps composite)
-  - [ ] B2 effort in ConversationInfo (in progress, stacked on B1)
-  - [ ] B3 grouped selects + config_option_update refresh (nice-to-have)
+  - [x] B2 effort in ConversationInfo — ryanskidmore/software-agent-sdk#2
+        (current_effort/available_efforts additive fields; 469+22 tests)
+  - [x] B3 grouped selects + config_option_update refresh —
+        ryanskidmore/software-agent-sdk#3 (508 tests; in-memory refresh,
+        persistence on next init_state; composite reconciliation)
   - [ ] dev-safe.mjs/uvx pointed at local fork (needed before live testing)
 
 ## Verified dev commands

@@ -111,6 +111,13 @@ export interface UseAcpModelChoicesInput {
   profileId?: string;
   /** See {@link BuildAcpModelChoicesInput.liveModels}. */
   liveModels?: ACPModelOption[];
+  /**
+   * Forwarded to {@link useAcpCatalogModels} — pass `false` to skip the
+   * models.dev catalog fetch when this hook must run unconditionally (Rules
+   * of Hooks) but the picker won't be shown this render (e.g. a non-ACP
+   * chat). Defaults to `true`, matching every pre-M3 call site.
+   */
+  enabled?: boolean;
 }
 
 export interface UseAcpModelChoicesResult {
@@ -130,10 +137,12 @@ export function useAcpModelChoices({
   curated,
   profileId,
   liveModels,
+  enabled,
 }: UseAcpModelChoicesInput): UseAcpModelChoicesResult {
   const { models: catalogMerged, catalogStatus } = useAcpCatalogModels(
     acpServer,
     curated,
+    { enabled },
   );
   const catalogExtras = catalogMerged.filter(
     (model) => model.source === "models.dev",

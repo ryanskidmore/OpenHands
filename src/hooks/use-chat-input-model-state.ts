@@ -13,14 +13,26 @@ import {
   getAcpProvider,
   labelForAcpModel,
   resolveEffectiveAcpModel,
-  type ACPModelOption,
 } from "#/constants/acp-providers";
+import {
+  useAcpModelChoices,
+  type AcpModelChoice,
+} from "#/hooks/use-acp-model-choices";
+import { parseAcpModelId } from "#/utils/acp-model-id";
 
 export interface ChatInputModelState {
   isAcpContext: boolean;
   displayModel: string | null;
   currentModelId: string | null;
-  availableAcpModels: ACPModelOption[];
+  /**
+   * `currentModelId`'s base model (see {@link parseAcpModelId}) — identical
+   * to `currentModelId` unless it's a composite "<base>/<effort>" session
+   * id, in which case this is the bare base. The picker uses this as a
+   * fallback match so a composite id (e.g. "sonnet/high") still highlights
+   * its bare "sonnet" row (M4/M5 own actually offering effort rows).
+   */
+  currentModelBaseId: string | null;
+  availableAcpModels: AcpModelChoice[];
   showAcpPicker: boolean;
   switchConversationId: string | null;
   destinationPath: AcpModelContext["destinationPath"];
@@ -96,7 +108,44 @@ export function useChatInputModelState(): ChatInputModelState {
     currentModelId && isAcpContext
       ? (labelForAcpModel(acpServerKey, currentModelId) ?? currentModelId)
       : currentModelId;
-  const availableAcpModels = acpProvider?.available_models ?? [];
+
+  // The active AgentProfile's stable UUID, used to key the "remembered
+  // custom model" store (see useAcpCustomModelsStore / useAcpModelChoices).
+  // On the home page this is the active profile fetched above; in a
+  // conversation it's the profile the conversation itself launched from.
+  // A conversation started off legacy `agent_settings` (no profile) has
+  // none — `undefined` there means "no custom entries offered/rememberable",
+  // matching useAcpModelChoices' documented pre-M2 behavior for an unknown
+  // profile id.
+  const profileId = isActiveAcpConversation
+    ? (conversation?.launched_agent_profile?.agent_profile_id ?? undefined)
+    : isHomeAcp
+      ? (activeAcpProfile?.id ?? undefined)
+      : undefined;
+
+  // Live models the ACP session itself currently reports — only meaningful
+  // inside an active ACP conversation (the home page has no running
+  // session); `undefined` there, and also on an agent-server too old to
+  // surface ConversationInfo.available_models. See AppConversation.acp_live_models.
+  const liveModels = isActiveAcpConversation
+    ? conversation?.acp_live_models
+    : undefined;
+
+  const { choices: availableAcpModels } = useAcpModelChoices({
+    acpServer: acpServerKey,
+    curated: acpProvider?.available_models ?? [],
+    profileId,
+    liveModels,
+    // Skip the models.dev catalog fetch outside an ACP context — this hook
+    // still runs on every chat render (Rules of Hooks), including plain
+    // OpenHands conversations that will never show the picker.
+    enabled: isAcpContext,
+  });
+
+  const currentModelBaseId = currentModelId
+    ? parseAcpModelId(currentModelId, acpServerKey).base
+    : null;
+
   // A home-page pick persists into the active ACP profile, which on cloud is
   // org-owned — hide the selectable rows from members who'd only get a 403.
   // Conversation-scoped switches (blank or started) stay member-allowed.
@@ -112,6 +161,7 @@ export function useChatInputModelState(): ChatInputModelState {
     isAcpContext,
     displayModel,
     currentModelId,
+    currentModelBaseId,
     availableAcpModels,
     showAcpPicker,
     switchConversationId,

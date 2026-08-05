@@ -2,6 +2,21 @@ import React from "react";
 import { fireEvent, screen } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderWithProviders } from "test-utils";
+import { fetchModelsDevCatalog } from "#/api/models-dev-catalog";
+import { useAcpCustomModelsStore } from "#/stores/acp-custom-models-store";
+
+// Never resolves: keeps the models.dev catalog request pending for the
+// life of every test here (none of them assert on catalog behavior — that's
+// use-acp-model-choices.test.tsx's job), so the picker's contents stay
+// deterministic (curated + live + custom only) without a real network call.
+vi.mock("#/api/models-dev-catalog", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("#/api/models-dev-catalog")>();
+  return {
+    ...actual,
+    fetchModelsDevCatalog: vi.fn(() => new Promise(() => {})),
+  };
+});
 
 const useActiveConversationMock = vi.fn();
 const useSettingsMock = vi.fn();
@@ -42,6 +57,8 @@ describe("ChatInputModel", () => {
     // fallback): live ACP model switching is local-only.
     useActiveBackendMock.mockReturnValue({ backend: { kind: "local" } });
     switchAcpModelMutate.mockReset();
+    vi.mocked(fetchModelsDevCatalog).mockClear();
+    useAcpCustomModelsStore.setState({ customModelsByProfileId: {} });
   });
 
   it("renders the active conversation's llm_model when present", () => {
@@ -339,5 +356,96 @@ describe("ChatInputModel", () => {
       "href",
       "/settings/agents",
     );
+  });
+
+  it("renders a live session model as a selectable row alongside the curated list", () => {
+    useActiveConversationMock.mockReturnValue({
+      data: {
+        conversation_id: "test-conversation-id",
+        agent_kind: "acp",
+        acp_server: "claude-code",
+        llm_model: "sonnet",
+        acp_live_models: [{ id: "session-only", label: "Session-Only Model" }],
+      },
+    });
+
+    renderWithProviders(<ChatInputModel />);
+    fireEvent.click(screen.getByTestId("chat-input-llm-model"));
+
+    expect(
+      screen.getByTestId("chat-input-acp-model-option-session-only"),
+    ).toHaveTextContent("Session-Only Model");
+    // The curated list is still offered alongside the live-only model.
+    expect(
+      screen.getByTestId("chat-input-acp-model-option-sonnet"),
+    ).toBeInTheDocument();
+  });
+
+  it("marks the base entry selected for a composite '<base>/<effort>' session model", () => {
+    useActiveConversationMock.mockReturnValue({
+      data: {
+        conversation_id: "test-conversation-id",
+        agent_kind: "acp",
+        acp_server: "claude-code",
+        llm_model: "sonnet/high",
+      },
+    });
+
+    renderWithProviders(<ChatInputModel />);
+    fireEvent.click(screen.getByTestId("chat-input-llm-model"));
+
+    // The composite id itself never appears as a row (choices are always
+    // bare base ids) — its base "sonnet" is the one marked current.
+    expect(
+      screen.queryByTestId("chat-input-acp-model-option-sonnet/high"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByTestId("chat-input-acp-model-option-sonnet"),
+    ).toHaveClass("bg-[var(--oh-interactive-hover)]");
+  });
+
+  it("does not re-switch when selecting the already-current base of a composite session model", () => {
+    useActiveConversationMock.mockReturnValue({
+      data: {
+        conversation_id: "test-conversation-id",
+        agent_kind: "acp",
+        acp_server: "claude-code",
+        llm_model: "sonnet/high",
+      },
+    });
+
+    renderWithProviders(<ChatInputModel />);
+    fireEvent.click(screen.getByTestId("chat-input-llm-model"));
+    fireEvent.click(screen.getByTestId("chat-input-acp-model-option-sonnet"));
+
+    // Clicking the row already highlighted as current (via the base-id
+    // fallback) is a no-op — it must not switch to a bare id that's already
+    // effectively selected.
+    expect(switchAcpModelMutate).not.toHaveBeenCalled();
+    expect(
+      screen.queryByTestId("chat-input-llm-model-popover"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("switching to a different base model from a composite session model drops the old effort", () => {
+    useActiveConversationMock.mockReturnValue({
+      data: {
+        conversation_id: "test-conversation-id",
+        agent_kind: "acp",
+        acp_server: "claude-code",
+        llm_model: "sonnet/high",
+      },
+    });
+
+    renderWithProviders(<ChatInputModel />);
+    fireEvent.click(screen.getByTestId("chat-input-llm-model"));
+    fireEvent.click(screen.getByTestId("chat-input-acp-model-option-opus[1m]"));
+
+    // The new model is sent as the bare id — there is no "high" suffix to
+    // carry over (M5 will own preserving/re-selecting an effort).
+    expect(switchAcpModelMutate).toHaveBeenCalledWith({
+      conversationId: "test-conversation-id",
+      model: "opus[1m]",
+    });
   });
 });

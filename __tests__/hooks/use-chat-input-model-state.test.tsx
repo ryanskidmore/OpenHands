@@ -1,7 +1,42 @@
 import { renderHook } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { AcpModelContext } from "#/hooks/use-acp-model-context";
-import { getAcpProvider } from "#/constants/acp-providers";
+import { getAcpProvider, type ACPModelOption } from "#/constants/acp-providers";
+import { fetchModelsDevCatalog } from "#/api/models-dev-catalog";
+import type { AcpModelChoice } from "#/hooks/use-acp-model-choices";
+import { useAcpCustomModelsStore } from "#/stores/acp-custom-models-store";
+
+vi.mock("#/api/models-dev-catalog", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("#/api/models-dev-catalog")>();
+  return {
+    ...actual,
+    fetchModelsDevCatalog: vi.fn(),
+  };
+});
+
+// Matches useAcpModelChoices' merge shape for a curated-only list (no live
+// session models, no remembered custom entries, no models.dev catalog data)
+// — the exact composition every pre-M3 test in this file exercises.
+function curatedChoices(options: ACPModelOption[] = []): AcpModelChoice[] {
+  return options.map((option) => ({
+    ...option,
+    source: "curated",
+  }));
+}
+
+function createWrapper() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  function Wrapper({ children }: { children: React.ReactNode }) {
+    return (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+  }
+  return Wrapper;
+}
 
 const useActiveConversationMock = vi.fn();
 const useSettingsMock = vi.fn();
@@ -83,6 +118,13 @@ describe("useChatInputModelState", () => {
     useActiveAcpProfileDetailMock.mockReturnValue(null);
     useCanManageOrgProfilesMock.mockReset();
     useCanManageOrgProfilesMock.mockReturnValue(true);
+    // Never resolves by default: catalogStatus stays "loading" so
+    // availableAcpModels stays curated(+live/custom)-only without every test
+    // needing `waitFor` — matches what these tests actually want to pin.
+    // Tests exercising catalog behavior specifically override this.
+    vi.mocked(fetchModelsDevCatalog).mockReset();
+    vi.mocked(fetchModelsDevCatalog).mockReturnValue(new Promise(() => {}));
+    useAcpCustomModelsStore.setState({ customModelsByProfileId: {} });
   });
 
   it("non-ACP: shows the conversation/settings llm_model with no picker", () => {
@@ -91,7 +133,9 @@ describe("useChatInputModelState", () => {
     });
     useOptionalConversationIdMock.mockReturnValue({ conversationId: "c1" });
 
-    const { result } = renderHook(() => useChatInputModelState());
+    const { result } = renderHook(() => useChatInputModelState(), {
+      wrapper: createWrapper(),
+    });
 
     expect(result.current.isAcpContext).toBe(false);
     expect(result.current.currentModelId).toBe("openai/gpt-4o");
@@ -107,7 +151,9 @@ describe("useChatInputModelState", () => {
     useActiveConversationMock.mockReturnValue({ data: undefined });
     useSettingsMock.mockReturnValue({ data: { llm_model: "openai/gpt-4o" } });
 
-    const { result } = renderHook(() => useChatInputModelState());
+    const { result } = renderHook(() => useChatInputModelState(), {
+      wrapper: createWrapper(),
+    });
 
     expect(result.current.currentModelId).toBe("openai/gpt-4o");
   });
@@ -137,20 +183,24 @@ describe("useChatInputModelState", () => {
       }),
     );
 
-    const { result } = renderHook(() => useChatInputModelState());
+    const { result } = renderHook(() => useChatInputModelState(), {
+      wrapper: createWrapper(),
+    });
 
     expect(result.current.isAcpContext).toBe(true);
     expect(result.current.currentModelId).toBe("sonnet");
     // Human label resolved from the registry (matches the conversation chip).
     expect(result.current.displayModel).toBe("Claude Sonnet 4.6");
     expect(result.current.availableAcpModels).toEqual(
-      provider?.available_models,
+      curatedChoices(provider?.available_models),
     );
     // Local backend + ACP + a non-empty model list → picker is enabled.
     expect(result.current.showAcpPicker).toBe(true);
     // Live switch targets the navigation conversation id.
     expect(result.current.switchConversationId).toBe("c1");
     expect(result.current.destinationPath).toBe("/settings/agents");
+    // No composite suffix on this session id → base equals the id itself.
+    expect(result.current.currentModelBaseId).toBe("sonnet");
   });
 
   it("home ACP: resolves the configured acp_model and exposes the picker, but no live-switch target", () => {
@@ -174,7 +224,9 @@ describe("useChatInputModelState", () => {
       }),
     );
 
-    const { result } = renderHook(() => useChatInputModelState());
+    const { result } = renderHook(() => useChatInputModelState(), {
+      wrapper: createWrapper(),
+    });
 
     expect(result.current.currentModelId).toBe("claude-sonnet-4-6");
     expect(result.current.showAcpPicker).toBe(true);
@@ -194,7 +246,9 @@ describe("useChatInputModelState", () => {
       acpContext({ isHomeAcp: true, isAcpContext: true }),
     );
 
-    const { result } = renderHook(() => useChatInputModelState());
+    const { result } = renderHook(() => useChatInputModelState(), {
+      wrapper: createWrapper(),
+    });
 
     expect(result.current.currentModelId).toBe(provider?.default_model);
   });
@@ -224,11 +278,13 @@ describe("useChatInputModelState", () => {
       acpContext({ isHomeAcp: true, isAcpContext: true }),
     );
 
-    const { result } = renderHook(() => useChatInputModelState());
+    const { result } = renderHook(() => useChatInputModelState(), {
+      wrapper: createWrapper(),
+    });
 
     expect(result.current.currentModelId).toBe("gpt-5.5");
     expect(result.current.availableAcpModels).toEqual(
-      getAcpProvider("codex")?.available_models,
+      curatedChoices(getAcpProvider("codex")?.available_models),
     );
   });
 
@@ -247,7 +303,9 @@ describe("useChatInputModelState", () => {
       acpContext({ isHomeAcp: true, isAcpContext: true }),
     );
 
-    const { result } = renderHook(() => useChatInputModelState());
+    const { result } = renderHook(() => useChatInputModelState(), {
+      wrapper: createWrapper(),
+    });
 
     expect(result.current.availableAcpModels.length).toBeGreaterThan(0);
     expect(result.current.showAcpPicker).toBe(false);
@@ -267,7 +325,9 @@ describe("useChatInputModelState", () => {
       acpContext({ isActiveAcpConversation: true, isAcpContext: true }),
     );
 
-    const { result } = renderHook(() => useChatInputModelState());
+    const { result } = renderHook(() => useChatInputModelState(), {
+      wrapper: createWrapper(),
+    });
 
     expect(result.current.availableAcpModels.length).toBeGreaterThan(0);
     // ACP + model list present → picker is enabled on all backends
@@ -288,11 +348,191 @@ describe("useChatInputModelState", () => {
       acpContext({ isActiveAcpConversation: true, isAcpContext: true }),
     );
 
-    const { result } = renderHook(() => useChatInputModelState());
+    const { result } = renderHook(() => useChatInputModelState(), {
+      wrapper: createWrapper(),
+    });
 
     expect(result.current.availableAcpModels).toEqual([]);
     expect(result.current.showAcpPicker).toBe(false);
     // Unknown model id has no registry label → falls back to the raw id.
     expect(result.current.displayModel).toBe("custom-model");
+  });
+
+  describe("M3: live session models", () => {
+    it("live models take precedence and appear ahead of the curated list", () => {
+      useActiveConversationMock.mockReturnValue({
+        data: {
+          conversation_id: "c1",
+          agent_kind: "acp",
+          acp_server: "claude-code",
+          llm_model: "sonnet",
+          acp_live_models: [{ id: "live-only", label: "Live Only Model" }],
+        },
+      });
+      useOptionalConversationIdMock.mockReturnValue({ conversationId: "c1" });
+      useAcpModelContextMock.mockReturnValue(
+        acpContext({ isActiveAcpConversation: true, isAcpContext: true }),
+      );
+
+      const { result } = renderHook(() => useChatInputModelState(), {
+        wrapper: createWrapper(),
+      });
+
+      const provider = getAcpProvider("claude-code");
+      expect(result.current.availableAcpModels).toEqual([
+        { id: "live-only", label: "Live Only Model", source: "live" },
+        ...curatedChoices(provider?.available_models),
+      ]);
+      expect(result.current.showAcpPicker).toBe(true);
+    });
+
+    it("does not read live models outside an active ACP conversation (home page has no session)", () => {
+      useActiveConversationMock.mockReturnValue({ data: undefined });
+      useSettingsMock.mockReturnValue({
+        data: {
+          agent_settings: { agent_kind: "acp", acp_server: "claude-code" },
+        },
+      });
+      useAcpModelContextMock.mockReturnValue(
+        acpContext({ isHomeAcp: true, isAcpContext: true }),
+      );
+
+      const { result } = renderHook(() => useChatInputModelState(), {
+        wrapper: createWrapper(),
+      });
+
+      expect(result.current.availableAcpModels).toEqual(
+        curatedChoices(getAcpProvider("claude-code")?.available_models),
+      );
+    });
+
+    it("custom server: shows the picker once the live session reports models, even with no curated list", () => {
+      useActiveConversationMock.mockReturnValue({
+        data: {
+          conversation_id: "c1",
+          agent_kind: "acp",
+          acp_server: "custom",
+          llm_model: "my-model",
+          acp_live_models: [{ id: "my-model", label: "my-model" }],
+        },
+      });
+      useAcpModelContextMock.mockReturnValue(
+        acpContext({ isActiveAcpConversation: true, isAcpContext: true }),
+      );
+
+      const { result } = renderHook(() => useChatInputModelState(), {
+        wrapper: createWrapper(),
+      });
+
+      expect(result.current.availableAcpModels).toEqual([
+        { id: "my-model", label: "my-model", source: "live" },
+      ]);
+      expect(result.current.showAcpPicker).toBe(true);
+    });
+
+    it("custom server: stays hidden with no curated list, no live models, and no remembered custom entries", () => {
+      useActiveConversationMock.mockReturnValue({
+        data: {
+          conversation_id: "c1",
+          agent_kind: "acp",
+          acp_server: "custom",
+          llm_model: "my-model",
+        },
+      });
+      useAcpModelContextMock.mockReturnValue(
+        acpContext({ isActiveAcpConversation: true, isAcpContext: true }),
+      );
+
+      const { result } = renderHook(() => useChatInputModelState(), {
+        wrapper: createWrapper(),
+      });
+
+      expect(result.current.availableAcpModels).toEqual([]);
+      expect(result.current.showAcpPicker).toBe(false);
+    });
+
+    it("custom server: shows the picker once a custom model is remembered for the active home profile", () => {
+      useAcpCustomModelsStore
+        .getState()
+        .addCustomModel("profile-custom-1", "remembered-model");
+      useActiveConversationMock.mockReturnValue({ data: undefined });
+      useSettingsMock.mockReturnValue({
+        data: { agent_settings: { agent_kind: "acp", acp_server: "custom" } },
+      });
+      useActiveAcpProfileDetailMock.mockReturnValue({
+        id: "profile-custom-1",
+        name: "custom-test",
+        agent_kind: "acp",
+        acp_server: "custom",
+        acp_model: "remembered-model",
+      });
+      useAcpModelContextMock.mockReturnValue(
+        acpContext({ isHomeAcp: true, isAcpContext: true }),
+      );
+
+      const { result } = renderHook(() => useChatInputModelState(), {
+        wrapper: createWrapper(),
+      });
+
+      expect(result.current.availableAcpModels).toEqual([
+        { id: "remembered-model", label: "remembered-model", source: "custom" },
+      ]);
+      expect(result.current.showAcpPicker).toBe(true);
+    });
+
+    it("composite current id ('<base>/<effort>') highlights via currentModelBaseId, not the raw id", () => {
+      useActiveConversationMock.mockReturnValue({
+        data: {
+          conversation_id: "c1",
+          agent_kind: "acp",
+          acp_server: "claude-code",
+          llm_model: "sonnet/high",
+        },
+      });
+      useAcpModelContextMock.mockReturnValue(
+        acpContext({ isActiveAcpConversation: true, isAcpContext: true }),
+      );
+
+      const { result } = renderHook(() => useChatInputModelState(), {
+        wrapper: createWrapper(),
+      });
+
+      expect(result.current.currentModelId).toBe("sonnet/high");
+      // The composite id itself never appears among the choices (curated
+      // ids are all bare)...
+      expect(
+        result.current.availableAcpModels.some(
+          (choice) => choice.id === "sonnet/high",
+        ),
+      ).toBe(false);
+      // ...but its parsed base does, so the picker can still mark it current.
+      expect(result.current.currentModelBaseId).toBe("sonnet");
+      expect(
+        result.current.availableAcpModels.some(
+          (choice) => choice.id === "sonnet",
+        ),
+      ).toBe(true);
+    });
+
+    it("leaves currentModelBaseId equal to currentModelId for a non-composite id (gemini-cli never splits)", () => {
+      useActiveConversationMock.mockReturnValue({
+        data: {
+          conversation_id: "c1",
+          agent_kind: "acp",
+          acp_server: "gemini-cli",
+          llm_model: "gemini-2.5-pro/high",
+        },
+      });
+      useAcpModelContextMock.mockReturnValue(
+        acpContext({ isActiveAcpConversation: true, isAcpContext: true }),
+      );
+
+      const { result } = renderHook(() => useChatInputModelState(), {
+        wrapper: createWrapper(),
+      });
+
+      expect(result.current.currentModelId).toBe("gemini-2.5-pro/high");
+      expect(result.current.currentModelBaseId).toBe("gemini-2.5-pro/high");
+    });
   });
 });
