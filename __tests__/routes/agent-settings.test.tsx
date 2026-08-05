@@ -1,3 +1,4 @@
+import type { ComponentProps } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -8,6 +9,8 @@ import SettingsService from "#/api/settings-service/settings-service.api";
 import { SecretsService } from "#/api/secrets-service";
 import { MOCK_DEFAULT_USER_SETTINGS } from "#/mocks/handlers";
 import { Settings } from "#/types/settings";
+import { fetchModelsDevCatalog } from "#/api/models-dev-catalog";
+import { useAcpCustomModelsStore } from "#/stores/acp-custom-models-store";
 
 // Stub the login-detection probe so the ACP credentials section doesn't spin a
 // subprocess; default to no detected session so existing tests are unaffected.
@@ -29,6 +32,21 @@ vi.mock("#/utils/custom-toast-handlers", () => ({
   displayWarningToast: toastMocks.warning,
 }));
 
+// The ACP model dropdown is now backed by `useAcpModelChoices`, which layers
+// the models.dev catalog on top of the curated list. Mock the catalog fetch
+// to resolve `null` (unavailable) by default so it never hits the real
+// network in tests and the merged list collapses back to curated-only,
+// matching every pre-M2 expectation below. Individual tests may override
+// this to exercise the catalog-upgrade path.
+vi.mock("#/api/models-dev-catalog", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("#/api/models-dev-catalog")>();
+  return {
+    ...actual,
+    fetchModelsDevCatalog: vi.fn(),
+  };
+});
+
 function buildSettings(overrides: Partial<Settings> = {}): Settings {
   return {
     ...MOCK_DEFAULT_USER_SETTINGS,
@@ -38,8 +56,10 @@ function buildSettings(overrides: Partial<Settings> = {}): Settings {
   };
 }
 
-function renderAgentSettingsScreen() {
-  return render(<AgentSettingsScreen />, {
+function renderAgentSettingsScreen(
+  props: ComponentProps<typeof AgentSettingsScreen> = {},
+) {
+  return render(<AgentSettingsScreen {...props} />, {
     wrapper: ({ children }) => (
       <MemoryRouter>
         <QueryClientProvider
@@ -62,6 +82,9 @@ describe("AgentSettingsScreen", () => {
     // secrets even on non-ACP renders.
     vi.spyOn(SecretsService, "getSecrets").mockResolvedValue([]);
     vi.spyOn(SecretsService, "createSecret").mockResolvedValue();
+    // Unavailable by default (see the module mock above) — the model
+    // dropdown falls back to curated-only, matching pre-M2 expectations.
+    vi.mocked(fetchModelsDevCatalog).mockReset().mockResolvedValue(null);
     acpAuthStatusMock.mockReturnValue({
       status: "unknown",
       isChecking: false,
@@ -869,5 +892,101 @@ describe("AgentSettingsScreen", () => {
     expect(
       await screen.findByTestId("settings-acp-auth-detected"),
     ).toBeInTheDocument();
+  });
+
+  describe("dynamic model choices (M2)", () => {
+    it("offers a previously remembered custom model as a selectable option", async () => {
+      const user = userEvent.setup();
+      useAcpCustomModelsStore
+        .getState()
+        .addCustomModel("profile-remember-1", "my-remembered-model");
+      vi.spyOn(SettingsService, "getSettings").mockResolvedValue(
+        buildSettings({
+          agent_settings: {
+            schema_version: 1,
+            agent_kind: "acp",
+            acp_server: "claude-code",
+            acp_command: [],
+            acp_model: null,
+          },
+        }),
+      );
+
+      renderAgentSettingsScreen({ profileId: "profile-remember-1" });
+      await screen.findByTestId("agent-command-input");
+      await user.click(screen.getByLabelText("SETTINGS$AGENT_MODEL"));
+
+      expect(
+        await screen.findByRole("option", { name: "my-remembered-model" }),
+      ).toBeInTheDocument();
+    });
+
+    it("shows a remembered custom model as selected (not the free-text override) on reload", async () => {
+      // The saved acp_model exactly matches a remembered custom entry for
+      // this profile — it should render as a normal selected dropdown item,
+      // not fall through to the ACP_CUSTOM_MODEL_KEY free-text input.
+      useAcpCustomModelsStore
+        .getState()
+        .addCustomModel("profile-remember-2", "my-remembered-model");
+      vi.spyOn(SettingsService, "getSettings").mockResolvedValue(
+        buildSettings({
+          agent_settings: {
+            schema_version: 1,
+            agent_kind: "acp",
+            acp_server: "claude-code",
+            acp_command: [],
+            acp_model: "my-remembered-model",
+          },
+        }),
+      );
+
+      renderAgentSettingsScreen({ profileId: "profile-remember-2" });
+      await screen.findByTestId("agent-command-input");
+
+      expect(screen.getByLabelText("SETTINGS$AGENT_MODEL")).toHaveValue(
+        "my-remembered-model",
+      );
+      expect(screen.queryByTestId("agent-model-input")).not.toBeInTheDocument();
+    });
+
+    it("remembers a newly committed custom model against the profile id on save", async () => {
+      const user = userEvent.setup();
+      vi.spyOn(SettingsService, "getSettings").mockResolvedValue(
+        buildSettings({
+          agent_settings: {
+            schema_version: 1,
+            agent_kind: "acp",
+            acp_server: "claude-code",
+            acp_command: [],
+            acp_model: null,
+          },
+        }),
+      );
+      const save = vi.spyOn(SettingsService, "saveSettings");
+
+      renderAgentSettingsScreen({ profileId: "profile-remember-3" });
+      await screen.findByTestId("agent-command-input");
+
+      await user.click(screen.getByLabelText("SETTINGS$AGENT_MODEL"));
+      await user.click(
+        await screen.findByRole("option", {
+          name: "SETTINGS$AGENT_PRESET_CUSTOM",
+        }),
+      );
+      await user.type(
+        screen.getByTestId("agent-model-input"),
+        "brand-new-model",
+      );
+      await user.click(screen.getByTestId("agent-save-button"));
+
+      await waitFor(() => {
+        expect(save).toHaveBeenCalledTimes(1);
+      });
+      expect(
+        useAcpCustomModelsStore.getState().customModelsByProfileId[
+          "profile-remember-3"
+        ],
+      ).toEqual(["brand-new-model"]);
+    });
   });
 });

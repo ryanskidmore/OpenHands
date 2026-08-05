@@ -23,7 +23,13 @@ fork. Never touch `main`; never self-merge PRs — Ryan reviews/merges.
 - [x] **M1** models.dev catalog service (fetch/cache/provider-map/merge + tests)
       — `src/api/models-dev-catalog.ts`, `src/hooks/query/use-models-dev-
       catalog.ts` (+ 33 tests). PR: stacked on M0.
-- [ ] **M2** multi-model profile editing in settings
+- [x] **M2** multi-model profile editing in settings — dynamic dropdown via
+      `use-acp-model-choices` (live>curated>custom>models.dev precedence),
+      per-profile remembered custom entries (`acp-custom-models-store`).
+      Note: `pruneMissingProfiles` store action exists but is not yet wired
+      to a call site (follow-up in M3/M6). Known pre-existing flake:
+      `__tests__/scripts/dev-with-automation.test.ts` SIGHUP test fails in
+      this sandbox, unrelated to this work.
 - [ ] **M3** dynamic chat pill incl. custom-server picker
 - [ ] **M4** effort foundation: encode/parse utility + capability flags + settings UI
 - [ ] **M5** mid-session model+effort switcher
