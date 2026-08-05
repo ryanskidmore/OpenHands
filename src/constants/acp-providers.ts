@@ -446,6 +446,27 @@ export function resolveAcpProviderIcon(
 }
 
 /**
+ * i18n key for each effort level {@link getAcpEffortLevels} can return,
+ * including the UI-only ``"default"`` sentinel {@link composeAcpModelId}
+ * treats as "no suffix" (acp-model-id.ts). Shared by every surface that
+ * renders effort levels as picker text — Settings → Agent's effort dropdown
+ * (agent-canvas M4) and the chat-input pill's mid-session effort switcher
+ * (agent-canvas M5) — so the two labels can't drift apart.
+ *
+ * A live ACP session can report an effort value with no entry here (a level
+ * Canvas's static mirror hasn't caught up to yet); callers should render the
+ * raw value in that case rather than guessing at a key.
+ */
+export const ACP_EFFORT_LEVEL_I18N_KEYS: Readonly<Record<string, I18nKey>> = {
+  default: I18nKey.SETTINGS$AGENT_EFFORT_DEFAULT,
+  low: I18nKey.SETTINGS$AGENT_EFFORT_LOW,
+  medium: I18nKey.SETTINGS$AGENT_EFFORT_MEDIUM,
+  high: I18nKey.SETTINGS$AGENT_EFFORT_HIGH,
+  xhigh: I18nKey.SETTINGS$AGENT_EFFORT_XHIGH,
+  max: I18nKey.SETTINGS$AGENT_EFFORT_MAX,
+};
+
+/**
  * Resolve a raw ``acp_model`` ID to the human-readable label the provider's
  * picker shows for it (e.g. ``"claude-opus-4-7"`` → ``"Claude Opus 4.7"``).
  *

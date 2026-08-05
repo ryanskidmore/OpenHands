@@ -16,6 +16,8 @@ import { Typography } from "#/ui/typography";
 import { I18nKey } from "#/i18n/declaration";
 import { cn } from "#/utils/utils";
 import { chatInputPillButtonClassName } from "#/utils/form-control-classes";
+import { composeAcpModelId } from "#/utils/acp-model-id";
+import { ACP_EFFORT_LEVEL_I18N_KEYS } from "#/constants/acp-providers";
 import React from "react";
 
 const MODEL_LABEL_MAX_CHARS = 10;
@@ -56,22 +58,34 @@ export function ChatInputModelMenuContent({
   const handleSelectAcpModel = (modelId: string) => {
     // Every picker row is a bare base model id (see `parseAcpModelId` —
     // composite "<base>/<effort>" ids only ever appear as a *session's*
-    // `currentModelId`, never as an offered choice), so switching to a
-    // different base always sends that bare id, silently dropping any
-    // effort suffix the current session id carried. Effort *preservation*
-    // across a base switch is M5's job; this is the one place that "drop
-    // it for now" rule is encoded. Guarding on `currentModelBaseId` (not
-    // just `currentModelId`) also makes re-selecting the already-current
-    // row (highlighted via the same base fallback) a no-op.
+    // `currentModelId`, never as an offered choice). Picking a different
+    // base now carries the current effort forward onto it via
+    // `composeAcpModelId` — the single documented site for this rule
+    // (M5 upgrades M3's "drop it for now" behavior). `composeAcpModelId`
+    // itself guards an unsupported/default effort, degrading back to the
+    // bare `modelId` automatically, so this call is safe even when the
+    // target server doesn't recognize `model.currentEffort` at all.
+    // Guarding on `currentModelBaseId` (not just `currentModelId`) also
+    // makes re-selecting the already-current row (highlighted via the same
+    // base fallback) a no-op.
     if (
       modelId !== model.currentModelId &&
       modelId !== model.currentModelBaseId
     ) {
       switchAcpModel.mutate({
         conversationId: model.switchConversationId,
-        model: modelId,
+        model: composeAcpModelId(
+          modelId,
+          model.currentEffort,
+          model.acpServerKey,
+        ),
       });
     }
+    onClose();
+  };
+
+  const handleSelectAcpEffort = (effort: string) => {
+    model.handleSelectAcpEffort(effort);
     onClose();
   };
 
@@ -137,6 +151,54 @@ export function ChatInputModelMenuContent({
           </div>
         </li>
       ) : null}
+      {model.availableEfforts && (
+        <>
+          <Divider inset={dividerInset} />
+          {/* role="presentation" — same reasoning as the model-list heading
+              above: a valid <li> child of the menu's <ul> that isn't itself
+              a selectable row. */}
+          <li role="presentation" className="px-2 pt-1 pb-0.5">
+            <Typography.Text className="text-[11px] font-medium text-[var(--oh-text-dim)] uppercase tracking-wide leading-4">
+              {t(I18nKey.SETTINGS$AGENT_EFFORT)}
+            </Typography.Text>
+          </li>
+          {model.availableEfforts.map((effort) => {
+            const isSelected = effort === model.currentEffort;
+            const i18nKey = ACP_EFFORT_LEVEL_I18N_KEYS[effort];
+            // A live server can report an effort value with no i18n key
+            // (out of band of Canvas's static mirror) — render it raw
+            // rather than guessing at a translation.
+            const label = i18nKey ? t(i18nKey) : effort;
+            return (
+              <ContextMenuListItem
+                key={effort}
+                testId={`chat-input-acp-effort-option-${effort}`}
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  handleSelectAcpEffort(effort);
+                }}
+                className={cn(
+                  "flex items-center gap-2",
+                  isSelected && "bg-[var(--oh-interactive-hover)]",
+                )}
+              >
+                <span className="flex-1 truncate text-sm leading-5">
+                  {label}
+                </span>
+                {isSelected && (
+                  <CheckIcon
+                    width={14}
+                    height={14}
+                    className="shrink-0"
+                    aria-hidden
+                  />
+                )}
+              </ContextMenuListItem>
+            );
+          })}
+        </>
+      )}
       {hasModelRows && <Divider inset={dividerInset} />}
       <li className="text-sm">
         <NavigationLink
