@@ -151,6 +151,42 @@ describe("buildAcpModelChoices", () => {
     ]);
   });
 
+  it("drops a catalog extra whose label matches a curated entry (alias vs full id)", () => {
+    const catalogExtras: MergedModelOption[] = [
+      {
+        id: "claude-sonnet-4-6",
+        label: "Claude Sonnet 4.6",
+        source: "models.dev",
+      },
+      { id: "claude-other-model", label: "Claude Other", source: "models.dev" },
+    ];
+
+    const result = buildAcpModelChoices({
+      curated: [{ id: "sonnet", label: "Claude Sonnet 4.6" }],
+      catalogExtras,
+    });
+
+    expect(result.map((c) => c.id)).toEqual(["sonnet", "claude-other-model"]);
+  });
+
+  it("label-dedupes catalog extras case-insensitively but never drops live/curated/custom entries", () => {
+    const result = buildAcpModelChoices({
+      liveModels: [{ id: "live-1", label: "Shared Label" }],
+      curated: [{ id: "curated-1", label: "shared label" }],
+      customIds: ["custom-1"],
+      catalogExtras: [
+        { id: "cat-1", label: "SHARED LABEL", source: "models.dev" },
+        { id: "cat-2", label: "custom-1 ", source: "models.dev" },
+      ],
+    });
+
+    expect(result.map((c) => c.id)).toEqual([
+      "live-1",
+      "curated-1",
+      "custom-1",
+    ]);
+  });
+
   it("labels a custom entry with its id (no separate display name is stored)", () => {
     const result = buildAcpModelChoices({
       curated: [],
