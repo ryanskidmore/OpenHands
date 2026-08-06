@@ -51,7 +51,12 @@ export interface BuildAcpModelChoicesInput {
  * dedupe precedence, since a later duplicate id is dropped): live session
  * models, then curated, then the profile's remembered custom entries, then
  * models.dev catalog extras. Ids are compared after trimming; the first
- * occurrence's metadata wins.
+ * occurrence's metadata wins. Catalog extras are additionally dropped when
+ * their display label matches an already-included entry — curated registry
+ * ids are aliases ("sonnet") while models.dev uses full ids
+ * ("claude-sonnet-4-6"), so the same model would otherwise appear twice
+ * under one label. Only catalog entries get label-deduped: live, curated,
+ * and user-entered custom ids are authoritative and always shown.
  */
 export function buildAcpModelChoices(
   input: BuildAcpModelChoicesInput,
@@ -64,7 +69,10 @@ export function buildAcpModelChoices(
   } = input;
 
   const seenIds = new Set<string>();
+  const seenLabels = new Set<string>();
   const choices: AcpModelChoice[] = [];
+
+  const normalizeLabel = (label: string) => label.trim().toLowerCase();
 
   function pushIfNew(
     option: {
@@ -77,7 +85,10 @@ export function buildAcpModelChoices(
   ) {
     const id = option.id.trim();
     if (!id || seenIds.has(id)) return;
+    if (source === "models.dev" && seenLabels.has(normalizeLabel(option.label)))
+      return;
     seenIds.add(id);
+    seenLabels.add(normalizeLabel(option.label));
     choices.push({
       id,
       label: option.label,
